@@ -5,12 +5,17 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .db import connect, init_db, transaction
+from .evaluation import run_evaluation
 from .llm import build_llm_client_from_env
 from .service import GameWorldService
 from .seed import DEMO_WORLD_ID, seed_demo_world
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+DEBUG_HTML_PATH = PACKAGE_DIR / "static" / "debug.html"
 
 
 class TurnRequest(BaseModel):
@@ -85,6 +90,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "demo_world_id": DEMO_WORLD_ID}
+
+    @app.get("/evaluation")
+    def evaluation() -> dict[str, Any]:
+        return run_evaluation()
+
+    @app.get("/debug", response_class=HTMLResponse)
+    def debug_panel() -> str:
+        return DEBUG_HTML_PATH.read_text(encoding="utf-8")
 
     return app
 

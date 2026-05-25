@@ -95,6 +95,12 @@ uv run python -m game_world_kg
 
 默认会初始化 `game_world_kg.sqlite3` 并 seed 城门 Demo，世界 ID 为 `demo_gate`。
 
+调试面板：
+
+```text
+http://127.0.0.1:8000/debug
+```
+
 AI 使用 OpenAI-compatible 接口，默认本地地址：
 
 ```text

@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Game World KG Debug</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #1f2937;
+      --muted: #667085;
+      --line: #d8dee8;
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --good: #13795b;
+      --warn: #9a6700;
+      --bad: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0;
+      letter-spacing: 0;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      min-height: calc(100vh - 58px);
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      padding: 16px;
+    }
+    section {
+      padding: 16px;
+      min-width: 0;
+    }
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      padding: 9px 10px;
+      border-radius: 6px;
+      font: inherit;
+    }
+    textarea {
+      min-height: 92px;
+      resize: vertical;
+    }
+    button {
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      border-radius: 6px;
+      padding: 8px 11px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover { background: var(--accent-dark); }
+    button.secondary {
+      background: #fff;
+      color: var(--accent);
+    }
+    .stack { display: grid; gap: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { flex: 1; }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+    .tab {
+      background: #fff;
+      color: var(--ink);
+      border-color: var(--line);
+      min-width: 96px;
+    }
+    .tab.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-width: 0;
+    }
+    .card h2 {
+      font-size: 15px;
+      margin: 0 0 8px;
+      letter-spacing: 0;
+    }
+    .muted { color: var(--muted); }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      color: var(--muted);
+      background: #fff;
+      margin: 2px 4px 2px 0;
+      max-width: 100%;
+    }
+    .ok { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      background: #111827;
+      color: #e5e7eb;
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 66vh;
+      overflow: auto;
+      margin: 0;
+      font-size: 12px;
+    }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      display: block;
+      max-width: 100%;
+    }
+    .table table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    th {
+      font-size: 12px;
+      color: var(--muted);
+      background: #f2f4f7;
+    }
+    tr:last-child td { border-bottom: 0; }
+    #status {
+      min-height: 20px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    @media (max-width: 860px) {
+      main { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      header { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Game World KG Debug</h1>
+    <div class="row" style="max-width: 420px;">
+      <input id="worldId" value="demo_gate" aria-label="world id">
+      <button id="refreshBtn" type="button">刷新</button>
+    </div>
+  </header>
+  <main>
+    <aside class="stack">
+      <div class="card stack">
+        <h2>提交回合</h2>
+        <textarea id="turnInput">我把通行令递给守卫，问他能不能放我进去</textarea>
+        <button id="turnBtn" type="button">提交</button>
+      </div>
+      <div class="card stack">
+        <h2>NPC 对话</h2>
+        <label for="npcId">NPC</label>
+        <input id="npcId" value="guard_alos">
+        <label for="npcQuestion">问题</label>
+        <textarea id="npcQuestion">你记得我做过什么吗</textarea>
+        <button id="npcBtn" type="button">询问</button>
+      </div>
+      <div class="card stack">
+        <h2>Replay</h2>
+        <label for="replayTurn">回合编号，留空为最新</label>
+        <input id="replayTurn" placeholder="1">
+        <button id="replayBtn" type="button">回放</button>
+      </div>
+      <div id="status"></div>
+    </aside>
+    <section>
+      <nav class="tabs" id="tabs"></nav>
+      <div id="content"></div>
+    </section>
+  </main>
+  <script>
+    const views = ["overview", "state", "events", "graph", "memories", "affordances", "quests", "evaluation", "raw"];
+    const labels = {
+      overview: "概览",
+      state: "State",
+      events: "Events",
+      graph: "Graph",
+      memories: "Memories",
+      affordances: "Affordances",
+      quests: "Quests",
+      evaluation: "Evaluation",
+      raw: "Raw"
+    };
+    const data = {};
+    let currentView = "overview";
+
+    function worldId() {
+      return document.getElementById("worldId").value.trim() || "demo_gate";
+    }
+
+    function setStatus(text, kind = "") {
+      const el = document.getElementById("status");
+      el.className = kind;
+      el.textContent = text;
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, options);
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`${response.status} ${body}`);
+      }
+      return response.json();
+    }
+
+    async function refresh() {
+      const id = worldId();
+      setStatus("刷新中...");
+      const [state, events, graph, memories, affordances, quests, evaluation] = await Promise.all([
+        api(`/worlds/${id}/state`),
+        api(`/worlds/${id}/events`),
+        api(`/worlds/${id}/graph`),
+        api(`/worlds/${id}/memories`),
+        api(`/worlds/${id}/affordances`),
+        api(`/worlds/${id}/quests`),
+        api(`/evaluation`)
+      ]);
+      Object.assign(data, { state, events, graph, memories, affordances, quests, evaluation });
+      setStatus(`已刷新 ${new Date().toLocaleTimeString()}`, "ok");
+      render();
+    }
+
+    async function submitTurn() {
+      const id = worldId();
+      const player_input = document.getElementById("turnInput").value;
+      setStatus("提交回合中...");
+      data.lastTurn = await api(`/worlds/${id}/turn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_input })
+      });
+      await refresh();
+      currentView = "overview";
+      render();
+    }
+
+    async function askNpc() {
+      const id = worldId();
+      const npc = document.getElementById("npcId").value.trim();
+      const question = document.getElementById("npcQuestion").value;
+      setStatus("询问 NPC 中...");
+      data.lastDialogue = await api(`/worlds/${id}/npc/${npc}/dialogue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question })
+      });
+      setStatus("NPC 已回答", "ok");
+      currentView = "overview";
+      render();
+    }
+
+    async function replay() {
+      const id = worldId();
+      const raw = document.getElementById("replayTurn").value.trim();
+      const to_turn = raw === "" ? null : Number(raw);
+      setStatus("回放中...");
+      data.lastReplay = await api(`/worlds/${id}/replay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to_turn })
+      });
+      await refresh();
+      setStatus("回放完成", "ok");
+    }
+
+    function renderTabs() {
+      const tabs = document.getElementById("tabs");
+      tabs.innerHTML = "";
+      for (const view of views) {
+        const button = document.createElement("button");
+        button.className = `tab ${view === currentView ? "active" : ""}`;
+        button.type = "button";
+        button.textContent = labels[view];
+        button.onclick = () => {
+          currentView = view;
+          render();
+        };
+        tabs.appendChild(button);
+      }
+    }
+
+    function render() {
+      renderTabs();
+      const content = document.getElementById("content");
+      if (currentView === "overview") content.innerHTML = overview();
+      if (currentView === "state") content.innerHTML = stateView();
+      if (currentView === "events") content.innerHTML = eventsView();
+      if (currentView === "graph") content.innerHTML = graphView();
+      if (currentView === "memories") content.innerHTML = memoriesView();
+      if (currentView === "affordances") content.innerHTML = affordancesView();
+      if (currentView === "quests") content.innerHTML = questsView();
+      if (currentView === "evaluation") content.innerHTML = evaluationView();
+      if (currentView === "raw") content.innerHTML = `<pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+    }
+
+    function overview() {
+      const state = data.state || {};
+      const lastTurn = data.lastTurn ? card("Last Turn", `<pre>${escapeHtml(JSON.stringify(data.lastTurn, null, 2))}</pre>`) : "";
+      const lastDialogue = data.lastDialogue ? card("Last Dialogue", `<pre>${escapeHtml(JSON.stringify(data.lastDialogue, null, 2))}</pre>`) : "";
+      return `
+        <div class="grid">
+          ${metric("玩家位置", state.player?.location || "-")}
+          ${metric("铁门", state.iron_gate?.open ? "已打开" : "未打开", state.iron_gate?.open ? "ok" : "warn")}
+          ${metric("守卫信任", state.guard_alos?.["trust.player"] ?? "-")}
+          ${metric("事件数", (data.events || []).length)}
+          ${metric("记忆数", (data.memories || []).length)}
+          ${metric("任务数", (data.quests || []).length)}
+        </div>
+        <div style="height:12px"></div>
+        <div class="grid">${lastTurn}${lastDialogue}</div>
+      `;
+    }
+
+    function stateView() {
+      const rows = [];
+      for (const [entity, attrs] of Object.entries(data.state || {})) {
+        for (const [attr, value] of Object.entries(attrs)) {
+          rows.push([entity, attr, JSON.stringify(value)]);
+        }
+      }
+      return table(["Entity", "Attr", "Value"], rows);
+    }
+
+    function eventsView() {
+      return table(["Turn", "Type", "Actor", "Payload"], (data.events || []).map(e => [
+        e.turn_index,
+        e.event_type,
+        e.actor_id || "-",
+        JSON.stringify(e.payload)
+      ]));
+    }
+
+    function graphView() {
+      const nodes = card("Nodes", table(["Id", "Type", "Name", "Scope"], (data.graph?.nodes || []).map(n => [n.id, n.entity_type, n.name || "-", n.scope])));
+      const edges = card("Edges", table(["Src", "Rel", "Dst", "Props"], (data.graph?.edges || []).filter(e => e.valid_to_turn === null).map(e => [e.src_id, e.rel_type, e.dst_id, JSON.stringify(e.properties)])));
+      return `<div class="grid">${nodes}${edges}</div>`;
+    }
+
+    function memoriesView() {
+      return table(["Owner", "Scope", "Memory", "Source"], (data.memories || []).map(m => [
+        m.owner_id,
+        m.truth_scope,
+        m.memory_text,
+        m.source_event_id || "-"
+      ]));
+    }
+
+    function affordancesView() {
+      return `<div class="grid">${(data.affordances || []).map(a => card(a.label, `
+        <div class="pill">${escapeHtml(a.action_id)}</div>
+        <div class="pill">${escapeHtml(a.risk)}</div>
+        <p class="muted">${escapeHtml(a.reason)}</p>
+      `)).join("")}</div>`;
+    }
+
+    function questsView() {
+      return `<div class="grid">${(data.quests || []).map(q => card(q.title, `
+        <div class="pill">${escapeHtml(q.quest_id)}</div>
+        <p>${escapeHtml(q.reason)}</p>
+        <p class="muted">Depends: ${escapeHtml(q.depends_on.join(", "))}</p>
+        <pre>${escapeHtml(JSON.stringify(q.evidence, null, 2))}</pre>
+      `)).join("")}</div>`;
+    }
+
+    function evaluationView() {
+      const summary = data.evaluation?.summary || {};
+      return `
+        <div class="grid">
+          ${Object.entries(summary).map(([key, value]) => metric(key, value, Number(value) === 0 ? "ok" : Number(value) === 1 ? "ok" : "" )).join("")}
+        </div>
+        <div style="height:12px"></div>
+        <pre>${escapeHtml(JSON.stringify(data.evaluation, null, 2))}</pre>
+      `;
+    }
+
+    function metric(label, value, kind = "") {
+      return card(label, `<strong class="${kind}">${escapeHtml(String(value))}</strong>`);
+    }
+
+    function card(title, body) {
+      return `<div class="card"><h2>${escapeHtml(title)}</h2>${body}</div>`;
+    }
+
+    function table(headers, rows) {
+      return `<div class="table"><table><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${escapeHtml(String(cell ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    document.getElementById("refreshBtn").onclick = () => refresh().catch(err => setStatus(err.message, "bad"));
+    document.getElementById("turnBtn").onclick = () => submitTurn().catch(err => setStatus(err.message, "bad"));
+    document.getElementById("npcBtn").onclick = () => askNpc().catch(err => setStatus(err.message, "bad"));
+    document.getElementById("replayBtn").onclick = () => replay().catch(err => setStatus(err.message, "bad"));
+    render();
+    refresh().catch(err => setStatus(err.message, "bad"));
+  </script>
+</body>
+</html>
