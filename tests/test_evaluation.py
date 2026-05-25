@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from game_world_kg.evaluation import evaluate_affordances, evaluate_npc_memory, evaluate_replay, run_evaluation
+from game_world_kg.evaluation import evaluate_affordances, evaluate_extraction, evaluate_npc_memory, evaluate_replay, run_evaluation
+
+
+def test_evaluate_extraction_reports_schema_evidence_and_scope_safety() -> None:
+    result = evaluate_extraction()
+
+    assert result["case_count"] == 4
+    assert result["schema_pass_rate"] == 1.0
+    assert result["evidence_coverage_rate"] == 1.0
+    assert result["canonical_error_rate"] == 0.0
+    assert result["illegal_or_uncertain_downgrade_rate"] == 1.0
 
 
 def test_evaluate_replay_reports_perfect_local_replay() -> None:
@@ -32,7 +42,10 @@ def test_evaluate_npc_memory_reports_scope_safety() -> None:
 def test_run_evaluation_returns_report_summary() -> None:
     report = run_evaluation(event_count=50)
 
-    assert set(report) == {"poc2_replay", "poc3_affordance", "poc4_npc_memory", "summary"}
+    assert set(report) == {"poc1_extraction", "poc2_replay", "poc3_affordance", "poc4_npc_memory", "summary"}
+    assert report["summary"]["schema_pass_rate"] == 1.0
+    assert report["summary"]["evidence_coverage_rate"] == 1.0
+    assert report["summary"]["canonical_error_rate"] == 0.0
     assert report["summary"]["replay_accuracy"] == 1.0
     assert report["summary"]["llm_calls_during_replay"] == 0
     assert report["summary"]["illegal_action_block_rate"] == 1.0

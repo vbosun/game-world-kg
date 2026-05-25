@@ -32,9 +32,10 @@ class RuleEngine:
         action_id: str | None = None,
         extractor: str = "rule_parser_v1",
         confidence: float = 0.9,
+        evidence_source_id: str | None = None,
     ) -> RuleResult:
         action_id = action_id or self.parse_action(player_input)
-        evidence = [{"source_id": turn_id, "span": [0, len(player_input)], "extractor": extractor, "confidence": confidence}]
+        evidence = [{"source_id": evidence_source_id or turn_id, "span": [0, len(player_input)], "extractor": extractor, "confidence": confidence}]
         if action_id == "show_pass_token":
             return self._show_pass_token(world_id, turn_id, turn_index, evidence)
         if action_id == "unlock_gate_with_key":

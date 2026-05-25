@@ -156,6 +156,7 @@ uv run python -m game_world_kg.evaluation
 评估输出覆盖：
 
 ```text
+PoC 1：文本日志建图、证据覆盖、scope 分流
 PoC 2：事件回放与 LLM 隔离
 PoC 3：Affordance 合法性
 PoC 4：NPC 记忆与 scope 安全

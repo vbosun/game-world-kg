@@ -6,6 +6,7 @@ from typing import Any
 
 from .db import connect, init_db, transaction
 from .events import EventLog
+from .extraction import ExtractionPipeline
 from .projector import StateProjector, delta
 from .seed import DEMO_WORLD_ID, seed_demo_world
 from .service import GameWorldService
@@ -32,14 +33,20 @@ class CountingLLM:
 
 
 def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
+    poc1 = evaluate_extraction()
     poc2 = evaluate_replay(event_count)
     poc3 = evaluate_affordances()
     poc4 = evaluate_npc_memory()
     return {
+        "poc1_extraction": poc1,
         "poc2_replay": poc2,
         "poc3_affordance": poc3,
         "poc4_npc_memory": poc4,
         "summary": {
+            "schema_pass_rate": poc1["schema_pass_rate"],
+            "evidence_coverage_rate": poc1["evidence_coverage_rate"],
+            "canonical_error_rate": poc1["canonical_error_rate"],
+            "illegal_or_uncertain_downgrade_rate": poc1["illegal_or_uncertain_downgrade_rate"],
             "replay_accuracy": poc2["replay_accuracy"],
             "llm_calls_during_replay": poc2["llm_calls_during_replay"],
             "illegal_action_block_rate": poc3["illegal_action_block_rate"],
@@ -48,6 +55,41 @@ def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
             "npc_privileged_knowledge_rate": poc4["npc_privileged_knowledge_rate"],
             "memory_correct_rate": poc4["memory_correct_rate"],
         },
+    }
+
+
+def evaluate_extraction() -> dict[str, Any]:
+    service = _new_service()
+    pipeline = ExtractionPipeline(service)
+    corpus = [
+        ("log_001", "玩家把通行令递给守卫。"),
+        ("log_002", "村里有人说玩家偷了钥匙。"),
+        ("log_003", "守卫怀疑玩家偷了钥匙。"),
+        ("log_004", "玩家用并不存在的银钥匙打开铁门。"),
+    ]
+    results = [pipeline.process_text(source_id, text) for source_id, text in corpus]
+
+    state = service.state(DEMO_WORLD_ID)
+    memories = service.memories(DEMO_WORLD_ID)
+    checks = [
+        state["pass_token"]["holder"] == "guard_alos",
+        state["silver_key"]["holder"] == "guard_alos",
+        state["iron_gate"]["open"] is False,
+        any(memory["truth_scope"] == "rumor" and memory["owner_id"] == "village" for memory in memories),
+        any(memory["truth_scope"] == "npc" and memory["owner_id"] == "guard_alos" for memory in memories),
+    ]
+    downgraded_checks = [
+        any(result["candidate"]["scope"] == "rumor" and result["memories"] for result in results),
+        any(result["candidate"]["scope"] == "npc" and result["memories"] for result in results),
+        any(result["candidate"]["action_id"] == "unlock_gate_with_key" and result["rejected"] for result in results),
+    ]
+    return {
+        "case_count": len(results),
+        "schema_pass_rate": _rate([result["schema_pass"] for result in results]),
+        "evidence_coverage_rate": _rate([_has_evidence(result) for result in results]),
+        "canonical_error_rate": 1.0 - _rate(checks),
+        "illegal_or_uncertain_downgrade_rate": _rate(downgraded_checks),
+        "results": results,
     }
 
 
@@ -195,6 +237,17 @@ def _rate(checks: list[bool]) -> float:
     if not checks:
         return 0.0
     return sum(1 for item in checks if item) / len(checks)
+
+
+def _has_evidence(result: dict[str, Any]) -> bool:
+    evidence = result["candidate"]["evidence"]
+    return (
+        evidence["source_id"] == result["source_id"]
+        and isinstance(evidence["span"], list)
+        and len(evidence["span"]) == 2
+        and evidence["span"][1] > evidence["span"][0]
+        and 0 <= evidence["confidence"] <= 1
+    )
 
 
 if __name__ == "__main__":
