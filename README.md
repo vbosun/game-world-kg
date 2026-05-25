@@ -78,3 +78,58 @@
 ```
 
 这个场景用于验证位置、物品、关系、记忆、规则、可行动作、状态变化和事件回放。
+
+## 本地运行
+
+安装依赖：
+
+```bash
+uv sync --extra test
+```
+
+启动 API：
+
+```bash
+uv run python -m game_world_kg
+```
+
+默认会初始化 `game_world_kg.sqlite3` 并 seed 城门 Demo，世界 ID 为 `demo_gate`。
+
+AI 使用 OpenAI-compatible 接口，默认本地地址：
+
+```text
+GAME_WORLD_KG_LLM_BASE_URL=http://localhost:5001/v1
+GAME_WORLD_KG_LLM_MODEL=qwen3
+GAME_WORLD_KG_LLM_API_KEY=
+GAME_WORLD_KG_LLM_TIMEOUT=30
+GAME_WORLD_KG_LLM_ENABLED=1
+```
+
+LLM 只生成候选 action 和叙事文本；canonical 状态仍只能由 Rule Engine 写入。
+
+最小接口：
+
+```text
+POST /worlds
+GET /worlds/demo_gate/state
+GET /worlds/demo_gate/graph
+GET /worlds/demo_gate/events
+GET /worlds/demo_gate/affordances
+GET /worlds/demo_gate/memories
+POST /worlds/demo_gate/turn
+POST /worlds/demo_gate/replay
+```
+
+提交一回合：
+
+```bash
+curl -X POST http://127.0.0.1:8000/worlds/demo_gate/turn \
+  -H "Content-Type: application/json" \
+  -d '{"player_input":"我把通行令递给守卫，问他能不能放我进去"}'
+```
+
+运行回归测试：
+
+```bash
+uv run pytest
+```

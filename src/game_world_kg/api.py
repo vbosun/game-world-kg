@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from .db import connect, init_db, transaction
+from .llm import build_llm_client_from_env
+from .service import GameWorldService
+from .seed import DEMO_WORLD_ID, seed_demo_world
+
+
+class TurnRequest(BaseModel):
+    player_input: str
+
+
+class ReplayRequest(BaseModel):
+    to_turn: int | None = None
+
+
+def create_app(db_path: str | None = None) -> FastAPI:
+    app = FastAPI(title="Game World KG MVP")
+    resolved_path = db_path or os.getenv("GAME_WORLD_KG_DB", "game_world_kg.sqlite3")
+    conn = connect(Path(resolved_path))
+    init_db(conn)
+    with transaction(conn):
+        seed_demo_world(conn)
+    service = GameWorldService(conn, build_llm_client_from_env())
+
+    @app.post("/worlds")
+    def create_world() -> dict[str, Any]:
+        return service.create_world()
+
+    @app.get("/worlds/{world_id}/state")
+    def get_state(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.state(world_id))
+
+    @app.get("/worlds/{world_id}/graph")
+    def get_graph(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.graph(world_id))
+
+    @app.get("/worlds/{world_id}/events")
+    def get_events(world_id: str) -> list[dict[str, Any]]:
+        return _handle(lambda: service.events(world_id))
+
+    @app.get("/worlds/{world_id}/affordances")
+    def get_affordances(world_id: str) -> list[dict[str, Any]]:
+        return _handle(lambda: service.affordances(world_id))
+
+    @app.get("/worlds/{world_id}/memories")
+    def get_memories(world_id: str, owner_id: str | None = None) -> list[dict[str, Any]]:
+        return _handle(lambda: service.memories(world_id, owner_id))
+
+    @app.post("/worlds/{world_id}/turn")
+    def post_turn(world_id: str, request: TurnRequest) -> dict[str, Any]:
+        return _handle(lambda: service.turn(world_id, request.player_input))
+
+    @app.post("/worlds/{world_id}/replay")
+    def post_replay(world_id: str, request: ReplayRequest) -> dict[str, Any]:
+        return _handle(lambda: service.replay(world_id, request.to_turn))
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok", "demo_world_id": DEMO_WORLD_ID}
+
+    return app
+
+
+def _handle(call):
+    try:
+        return call()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"world not found: {exc.args[0]}") from exc
+
+
+app = create_app()
