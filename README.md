@@ -105,6 +105,8 @@ GAME_WORLD_KG_LLM_TIMEOUT=30
 GAME_WORLD_KG_LLM_ENABLED=1
 ```
 
+也可以复制 `.env.example` 为 `.env`，在 `.env` 中配置本地模型地址和 API key。系统环境变量优先级高于 `.env`。
+
 LLM 只生成候选 action 和叙事文本；canonical 状态仍只能由 Rule Engine 写入。
 
 最小接口：
