@@ -38,8 +38,17 @@
 
 ## 文档
 
+基础文档：
+
 - [游戏通用知识图谱研究报告](docs/research-report.md)
 - [本地 MVP 落地方案](docs/mvp-plan.md)
+
+严格对齐研究报告的详细设计：
+
+- [本体与版本化设计](docs/ontology.md)
+- [Event Sourcing 与一致性设计](docs/event-sourcing.md)
+- [混合抽取与图谱更新管线](docs/extraction-pipeline.md)
+- [评估体系与 PoC 计划](docs/evaluation.md)
 
 ## 当前阶段
 
