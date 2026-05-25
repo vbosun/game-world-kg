@@ -11,6 +11,7 @@ from .graph import WorldGraph
 from .llm import ActionParser, LLMClient, Narrator
 from .memory import MemoryAwareDialogue, MemoryGraph
 from .projector import StateProjector
+from .quest import QuestGenerator, QuestValidator
 from .rules import RuleEngine
 from .seed import DEMO_WORLD_ID, seed_demo_world
 
@@ -87,6 +88,16 @@ class GameWorldService:
         with self._lock:
             self._require_world(world_id)
             return AffordanceEngine(self.conn).list_for_player(world_id)
+
+    def quests(self, world_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            return QuestGenerator(self).generate(world_id)
+
+    def validate_quest(self, world_id: str, quest: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            return QuestValidator(self).validate(quest, world_id)
 
     def turn(self, world_id: str, player_input: str) -> dict[str, Any]:
         self._require_world(world_id)

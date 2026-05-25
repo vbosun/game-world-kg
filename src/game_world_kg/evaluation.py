@@ -8,6 +8,7 @@ from .db import connect, init_db, transaction
 from .events import EventLog
 from .extraction import ExtractionPipeline
 from .projector import StateProjector, delta
+from .quest import QuestValidator
 from .seed import DEMO_WORLD_ID, seed_demo_world
 from .service import GameWorldService
 
@@ -37,11 +38,13 @@ def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
     poc2 = evaluate_replay(event_count)
     poc3 = evaluate_affordances()
     poc4 = evaluate_npc_memory()
+    poc5 = evaluate_quests()
     return {
         "poc1_extraction": poc1,
         "poc2_replay": poc2,
         "poc3_affordance": poc3,
         "poc4_npc_memory": poc4,
+        "poc5_quests": poc5,
         "summary": {
             "schema_pass_rate": poc1["schema_pass_rate"],
             "evidence_coverage_rate": poc1["evidence_coverage_rate"],
@@ -54,6 +57,9 @@ def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
             "canonical_pollution_rate": poc4["canonical_pollution_rate"],
             "npc_privileged_knowledge_rate": poc4["npc_privileged_knowledge_rate"],
             "memory_correct_rate": poc4["memory_correct_rate"],
+            "quest_dependency_valid_rate": poc5["quest_dependency_valid_rate"],
+            "quest_traceability_rate": poc5["quest_traceability_rate"],
+            "quest_completable_rate": poc5["quest_completable_rate"],
         },
     }
 
@@ -184,6 +190,26 @@ def evaluate_npc_memory() -> dict[str, Any]:
     }
 
 
+def evaluate_quests() -> dict[str, Any]:
+    service = _new_service()
+    initial_quests = service.quests(DEMO_WORLD_ID)
+
+    service.turn(DEMO_WORLD_ID, "村里有人说玩家偷了钥匙")
+    rumor_quests = service.quests(DEMO_WORLD_ID)
+    quests = _unique_quests(initial_quests + rumor_quests)
+    validations = [QuestValidator(service).validate(quest, DEMO_WORLD_ID) for quest in quests]
+    return {
+        "quest_count": len(quests),
+        "quests": quests,
+        "validations": validations,
+        "quest_dependency_valid_rate": _rate([item["dependency_valid"] for item in validations]),
+        "quest_traceability_rate": _rate([item["traceable"] for item in validations]),
+        "quest_completable_rate": _rate([item["completable"] for item in validations]),
+        "quest_reward_valid_rate": _rate([item["reward_valid"] for item in validations]),
+        "quest_failure_valid_rate": _rate([item["failure_valid"] for item in validations]),
+    }
+
+
 def _new_service() -> GameWorldService:
     conn = connect(":memory:")
     init_db(conn)
@@ -248,6 +274,13 @@ def _has_evidence(result: dict[str, Any]) -> bool:
         and evidence["span"][1] > evidence["span"][0]
         and 0 <= evidence["confidence"] <= 1
     )
+
+
+def _unique_quests(quests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for quest in quests:
+        unique[quest["quest_id"]] = quest
+    return list(unique.values())
 
 
 if __name__ == "__main__":

@@ -117,6 +117,7 @@ GET /worlds/demo_gate/state
 GET /worlds/demo_gate/graph
 GET /worlds/demo_gate/events
 GET /worlds/demo_gate/affordances
+GET /worlds/demo_gate/quests
 GET /worlds/demo_gate/memories
 GET /worlds/demo_gate/memories/guard_alos/recall?query=通行令
 GET /worlds/demo_gate/neighbors/guard_alos
@@ -160,4 +161,5 @@ PoC 1：文本日志建图、证据覆盖、scope 分流
 PoC 2：事件回放与 LLM 隔离
 PoC 3：Affordance 合法性
 PoC 4：NPC 记忆与 scope 安全
+PoC 5：任务链生成、依赖合法性、证据追溯
 ```

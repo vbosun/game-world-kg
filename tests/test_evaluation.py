@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from game_world_kg.evaluation import evaluate_affordances, evaluate_extraction, evaluate_npc_memory, evaluate_replay, run_evaluation
+from game_world_kg.evaluation import (
+    evaluate_affordances,
+    evaluate_extraction,
+    evaluate_npc_memory,
+    evaluate_quests,
+    evaluate_replay,
+    run_evaluation,
+)
 
 
 def test_evaluate_extraction_reports_schema_evidence_and_scope_safety() -> None:
@@ -39,10 +46,21 @@ def test_evaluate_npc_memory_reports_scope_safety() -> None:
     assert result["canonical_pollution_rate"] == 0.0
 
 
+def test_evaluate_quests_reports_dependency_traceability_and_completion() -> None:
+    result = evaluate_quests()
+
+    assert result["quest_count"] == 3
+    assert result["quest_dependency_valid_rate"] == 1.0
+    assert result["quest_traceability_rate"] == 1.0
+    assert result["quest_completable_rate"] == 1.0
+    assert result["quest_reward_valid_rate"] == 1.0
+    assert result["quest_failure_valid_rate"] == 1.0
+
+
 def test_run_evaluation_returns_report_summary() -> None:
     report = run_evaluation(event_count=50)
 
-    assert set(report) == {"poc1_extraction", "poc2_replay", "poc3_affordance", "poc4_npc_memory", "summary"}
+    assert set(report) == {"poc1_extraction", "poc2_replay", "poc3_affordance", "poc4_npc_memory", "poc5_quests", "summary"}
     assert report["summary"]["schema_pass_rate"] == 1.0
     assert report["summary"]["evidence_coverage_rate"] == 1.0
     assert report["summary"]["canonical_error_rate"] == 0.0
@@ -50,3 +68,6 @@ def test_run_evaluation_returns_report_summary() -> None:
     assert report["summary"]["llm_calls_during_replay"] == 0
     assert report["summary"]["illegal_action_block_rate"] == 1.0
     assert report["summary"]["canonical_pollution_rate"] == 0.0
+    assert report["summary"]["quest_dependency_valid_rate"] == 1.0
+    assert report["summary"]["quest_traceability_rate"] == 1.0
+    assert report["summary"]["quest_completable_rate"] == 1.0
