@@ -146,3 +146,17 @@ curl -X POST http://127.0.0.1:8000/worlds/demo_gate/npc/guard_alos/dialogue \
 ```bash
 uv run pytest
 ```
+
+运行 MVP 评估：
+
+```bash
+uv run python -m game_world_kg.evaluation
+```
+
+评估输出覆盖：
+
+```text
+PoC 2：事件回放与 LLM 隔离
+PoC 3：Affordance 合法性
+PoC 4：NPC 记忆与 scope 安全
+```
