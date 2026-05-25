@@ -3,9 +3,22 @@ from __future__ import annotations
 import pytest
 
 from game_world_kg.db import connect, init_db, transaction
-from game_world_kg.extraction import ExtractionPipeline, RuleBasedExtractor, SchemaValidator
+from game_world_kg.extraction import ExtractionPipeline, RuleBasedExtractor, SchemaValidator, LLMExtractor
 from game_world_kg.seed import DEMO_WORLD_ID, seed_demo_world
 from game_world_kg.service import GameWorldService
+
+
+class FakeExtractionLLM:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.json_calls = 0
+
+    def complete_json(self, messages, *, temperature=0):
+        self.json_calls += 1
+        return self.payload
+
+    def complete_text(self, messages, *, temperature=0.4):
+        return "fake"
 
 
 @pytest.fixture()
@@ -65,3 +78,58 @@ def test_pipeline_rejects_illegal_key_claim(service: GameWorldService) -> None:
     assert result["events"] == []
     assert result["rejected"][0]["reason"] == "玩家没有银钥匙，不能用钥匙打开铁门。"
     assert service.state(DEMO_WORLD_ID)["iron_gate"]["open"] is False
+
+
+def test_pipeline_uses_llm_extractor_for_ambiguous_subjective_text() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    with transaction(conn):
+        seed_demo_world(conn)
+    fake_llm = FakeExtractionLLM({"action_id": "guard_suspects_player", "confidence": 0.88, "evidence_span": [0, 18]})
+    service = GameWorldService(conn, fake_llm)
+
+    result = ExtractionPipeline(service).process_text("log_llm_001", "阿洛斯皱眉，似乎仍觉得我和钥匙失窃有关。")
+
+    assert fake_llm.json_calls == 1
+    assert result["candidate"]["action_id"] == "guard_suspects_player"
+    assert result["candidate"]["scope"] == "npc"
+    assert result["candidate"]["evidence"]["extractor"] == "llm_extractor_v1"
+    assert result["events"][0]["evidence_refs"][0]["source_id"] == "log_llm_001"
+    assert result["events"][0]["evidence_refs"][0]["span"] == [0, 18]
+    assert result["memories"][0]["truth_scope"] == "npc"
+    assert service.state(DEMO_WORLD_ID)["silver_key"]["holder"] == "guard_alos"
+
+
+def test_pipeline_uses_llm_extractor_for_ambiguous_rumor_text() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    with transaction(conn):
+        seed_demo_world(conn)
+    fake_llm = FakeExtractionLLM({"action_id": "rumor_player_stole_key", "confidence": 0.81, "evidence_span": [0, 20]})
+    service = GameWorldService(conn, fake_llm)
+
+    result = ExtractionPipeline(service).process_text("log_llm_002", "村口的人们小声议论，说我昨夜靠近过守卫室。")
+
+    assert fake_llm.json_calls == 1
+    assert result["candidate"]["scope"] == "rumor"
+    assert result["memories"][0]["truth_scope"] == "rumor"
+    assert service.state(DEMO_WORLD_ID)["silver_key"]["holder"] == "guard_alos"
+
+
+def test_rule_extractor_takes_precedence_over_llm(service: GameWorldService) -> None:
+    fake_llm = FakeExtractionLLM({"action_id": "unlock_gate_with_key", "confidence": 0.99, "evidence_span": [0, 10]})
+    service.llm_client = fake_llm
+
+    result = ExtractionPipeline(service).process_text("log_005", "玩家把通行令递给守卫。")
+
+    assert fake_llm.json_calls == 0
+    assert result["candidate"]["action_id"] == "show_pass_token"
+
+
+def test_llm_extractor_expands_too_short_evidence_span(service: GameWorldService) -> None:
+    fake_llm = FakeExtractionLLM({"action_id": "guard_suspects_player", "confidence": 0.9, "evidence_span": [0, 1]})
+
+    candidate = LLMExtractor(fake_llm).extract("log_llm_003", "阿洛斯皱眉，似乎仍觉得我和钥匙失窃有关。", service.state(DEMO_WORLD_ID), service.graph(DEMO_WORLD_ID)["nodes"])
+
+    assert candidate is not None
+    assert candidate.evidence.span == (0, len(candidate.text))

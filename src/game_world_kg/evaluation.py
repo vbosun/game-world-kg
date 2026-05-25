@@ -33,14 +33,30 @@ class CountingLLM:
         return self.json_calls + self.text_calls
 
 
+@dataclass
+class SequenceExtractionLLM:
+    payloads: list[dict[str, Any]]
+    json_calls: int = 0
+
+    def complete_json(self, messages: list[dict[str, str]], *, temperature: float = 0) -> dict[str, Any]:
+        payload = self.payloads[self.json_calls]
+        self.json_calls += 1
+        return payload
+
+    def complete_text(self, messages: list[dict[str, str]], *, temperature: float = 0.4) -> str:
+        return "评估旁白。"
+
+
 def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
     poc1 = evaluate_extraction()
+    llm_extraction = evaluate_llm_extraction()
     poc2 = evaluate_replay(event_count)
     poc3 = evaluate_affordances()
     poc4 = evaluate_npc_memory()
     poc5 = evaluate_quests()
     return {
         "poc1_extraction": poc1,
+        "llm_extraction": llm_extraction,
         "poc2_replay": poc2,
         "poc3_affordance": poc3,
         "poc4_npc_memory": poc4,
@@ -50,6 +66,9 @@ def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
             "evidence_coverage_rate": poc1["evidence_coverage_rate"],
             "canonical_error_rate": poc1["canonical_error_rate"],
             "illegal_or_uncertain_downgrade_rate": poc1["illegal_or_uncertain_downgrade_rate"],
+            "llm_extraction_schema_pass_rate": llm_extraction["schema_pass_rate"],
+            "llm_extraction_scope_accuracy": llm_extraction["scope_accuracy"],
+            "llm_extraction_canonical_error_rate": llm_extraction["canonical_error_rate"],
             "replay_accuracy": poc2["replay_accuracy"],
             "llm_calls_during_replay": poc2["llm_calls_during_replay"],
             "illegal_action_block_rate": poc3["illegal_action_block_rate"],
@@ -61,6 +80,32 @@ def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
             "quest_traceability_rate": poc5["quest_traceability_rate"],
             "quest_completable_rate": poc5["quest_completable_rate"],
         },
+    }
+
+
+def evaluate_llm_extraction() -> dict[str, Any]:
+    llm = SequenceExtractionLLM(
+        [
+            {"action_id": "guard_suspects_player", "confidence": 0.88, "evidence_span": [0, 18]},
+            {"action_id": "rumor_player_stole_key", "confidence": 0.81, "evidence_span": [0, 20]},
+        ]
+    )
+    service = _new_service(llm)
+    pipeline = ExtractionPipeline(service)
+    corpus = [
+        ("llm_log_001", "阿洛斯皱眉，似乎仍觉得我和钥匙失窃有关。", "npc"),
+        ("llm_log_002", "村口的人们小声议论，说我昨夜靠近过守卫室。", "rumor"),
+    ]
+    results = [(pipeline.process_text(source_id, text), expected_scope) for source_id, text, expected_scope in corpus]
+    state = service.state(DEMO_WORLD_ID)
+    return {
+        "case_count": len(results),
+        "llm_calls": llm.json_calls,
+        "schema_pass_rate": _rate([result["schema_pass"] for result, _ in results]),
+        "scope_accuracy": _rate([result["candidate"]["scope"] == expected_scope for result, expected_scope in results]),
+        "evidence_coverage_rate": _rate([_has_evidence(result) for result, _ in results]),
+        "canonical_error_rate": 0.0 if state["silver_key"]["holder"] == "guard_alos" and state["iron_gate"]["open"] is False else 1.0,
+        "results": [result for result, _ in results],
     }
 
 
@@ -210,12 +255,12 @@ def evaluate_quests() -> dict[str, Any]:
     }
 
 
-def _new_service() -> GameWorldService:
+def _new_service(llm_client: Any | None = None) -> GameWorldService:
     conn = connect(":memory:")
     init_db(conn)
     with transaction(conn):
         seed_demo_world(conn)
-    return GameWorldService(conn)
+    return GameWorldService(conn, llm_client)
 
 
 def _new_service_with_llm() -> tuple[GameWorldService, CountingLLM]:

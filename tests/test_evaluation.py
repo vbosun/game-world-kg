@@ -3,6 +3,7 @@ from __future__ import annotations
 from game_world_kg.evaluation import (
     evaluate_affordances,
     evaluate_extraction,
+    evaluate_llm_extraction,
     evaluate_npc_memory,
     evaluate_quests,
     evaluate_replay,
@@ -18,6 +19,17 @@ def test_evaluate_extraction_reports_schema_evidence_and_scope_safety() -> None:
     assert result["evidence_coverage_rate"] == 1.0
     assert result["canonical_error_rate"] == 0.0
     assert result["illegal_or_uncertain_downgrade_rate"] == 1.0
+
+
+def test_evaluate_llm_extraction_reports_scope_safety() -> None:
+    result = evaluate_llm_extraction()
+
+    assert result["case_count"] == 2
+    assert result["llm_calls"] == 2
+    assert result["schema_pass_rate"] == 1.0
+    assert result["scope_accuracy"] == 1.0
+    assert result["evidence_coverage_rate"] == 1.0
+    assert result["canonical_error_rate"] == 0.0
 
 
 def test_evaluate_replay_reports_perfect_local_replay() -> None:
@@ -60,10 +72,13 @@ def test_evaluate_quests_reports_dependency_traceability_and_completion() -> Non
 def test_run_evaluation_returns_report_summary() -> None:
     report = run_evaluation(event_count=50)
 
-    assert set(report) == {"poc1_extraction", "poc2_replay", "poc3_affordance", "poc4_npc_memory", "poc5_quests", "summary"}
+    assert set(report) == {"poc1_extraction", "llm_extraction", "poc2_replay", "poc3_affordance", "poc4_npc_memory", "poc5_quests", "summary"}
     assert report["summary"]["schema_pass_rate"] == 1.0
     assert report["summary"]["evidence_coverage_rate"] == 1.0
     assert report["summary"]["canonical_error_rate"] == 0.0
+    assert report["summary"]["llm_extraction_schema_pass_rate"] == 1.0
+    assert report["summary"]["llm_extraction_scope_accuracy"] == 1.0
+    assert report["summary"]["llm_extraction_canonical_error_rate"] == 0.0
     assert report["summary"]["replay_accuracy"] == 1.0
     assert report["summary"]["llm_calls_during_replay"] == 0
     assert report["summary"]["illegal_action_block_rate"] == 1.0

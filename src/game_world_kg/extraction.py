@@ -7,7 +7,7 @@ from .affordance import AffordanceEngine
 from .db import transaction
 from .events import EventLog
 from .graph import WorldGraph
-from .llm import ALLOWED_ACTION_IDS
+from .llm import ALLOWED_ACTION_IDS, LLMClient, LLMError
 from .rules import RuleEngine
 from .service import GameWorldService
 
@@ -65,6 +65,64 @@ class RuleBasedExtractor:
         )
 
 
+class LLMExtractor:
+    def __init__(self, client: LLMClient | None) -> None:
+        self.client = client
+
+    def extract(
+        self,
+        source_id: str,
+        text: str,
+        state_summary: dict[str, Any],
+        known_entities: list[dict[str, Any]],
+    ) -> ExtractionCandidate | None:
+        if self.client is None:
+            return None
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是游戏世界日志抽取器。只输出 JSON 对象，不要解释。"
+                    f"action_id 只能是: {', '.join(sorted(ALLOWED_ACTION_IDS))}。"
+                    "根据文本提出候选 action_id、confidence、evidence_span。"
+                    "不要决定是否进入 canonical，系统会用本地 ScopeRouter 和 RuleEngine 裁判。"
+                    "格式: {\"action_id\":\"...\",\"confidence\":0.0,\"evidence_span\":[0,1]}"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"source_id={source_id}\n"
+                    f"text={text}\n"
+                    f"state_summary={state_summary}\n"
+                    f"known_entities={known_entities}"
+                ),
+            },
+        ]
+        try:
+            raw = self.client.complete_json(messages, temperature=0)
+        except LLMError:
+            return None
+        action_id = raw.get("action_id")
+        if action_id not in ALLOWED_ACTION_IDS:
+            return None
+        confidence = _coerce_confidence(raw.get("confidence", 0.5))
+        span = _coerce_span(raw.get("evidence_span"), len(text))
+        return ExtractionCandidate(
+            source_id=source_id,
+            text=text,
+            action_id=action_id,
+            scope=ScopeRouter.route_action(action_id),
+            confidence=confidence,
+            evidence=EvidenceRef(
+                source_id=source_id,
+                span=span,
+                extractor="llm_extractor_v1",
+                confidence=confidence,
+            ),
+        )
+
+
 class SchemaValidator:
     def validate(self, candidate: ExtractionCandidate) -> ValidationResult:
         errors: list[str] = []
@@ -97,10 +155,20 @@ class ExtractionPipeline:
     def __init__(self, service: GameWorldService) -> None:
         self.service = service
         self.extractor = RuleBasedExtractor()
+        self.llm_extractor = LLMExtractor(service.llm_client)
         self.validator = SchemaValidator()
 
     def process_text(self, source_id: str, text: str) -> dict[str, Any]:
         candidate = self.extractor.extract(source_id, text)
+        if candidate.action_id == "talk_to_guard" and self.service.llm_client is not None:
+            llm_candidate = self.llm_extractor.extract(
+                source_id,
+                text,
+                self.service.state(self._world_id),
+                self.service.graph(self._world_id)["nodes"],
+            )
+            if llm_candidate is not None:
+                candidate = llm_candidate
         validation = self.validator.validate(candidate)
         if not validation.passed:
             return {
@@ -140,6 +208,7 @@ class ExtractionPipeline:
                     extractor=candidate.evidence.extractor,
                     confidence=candidate.confidence,
                     evidence_source_id=candidate.source_id,
+                    evidence_span=[candidate.evidence.span[0], candidate.evidence.span[1]],
                 )
                 self.service.conn.execute("UPDATE turns SET narration = ? WHERE id = ?", (result.narration, turn_id))
             events = [
@@ -181,3 +250,26 @@ def _candidate_payload(candidate: ExtractionCandidate) -> dict[str, Any]:
         "confidence": candidate.confidence,
         "evidence": candidate.evidence.as_dict(),
     }
+
+
+def _coerce_confidence(value: Any) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    return max(0.0, min(1.0, confidence))
+
+
+def _coerce_span(value: Any, text_length: int) -> tuple[int, int]:
+    if isinstance(value, list) and len(value) == 2:
+        try:
+            start = int(value[0])
+            end = int(value[1])
+        except (TypeError, ValueError):
+            return (0, text_length)
+        start = max(0, min(start, text_length))
+        end = max(start + 1, min(end, text_length))
+        if text_length > 1 and end - start <= 1:
+            return (0, text_length)
+        return (start, end)
+    return (0, text_length)
