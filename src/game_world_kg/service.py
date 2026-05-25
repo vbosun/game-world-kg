@@ -8,6 +8,7 @@ from .db import transaction
 from .events import EventLog
 from .graph import WorldGraph
 from .llm import ActionParser, LLMClient, Narrator
+from .memory import MemoryAwareDialogue, MemoryGraph
 from .projector import StateProjector
 from .rules import RuleEngine
 from .seed import DEMO_WORLD_ID, seed_demo_world
@@ -16,6 +17,7 @@ from .seed import DEMO_WORLD_ID, seed_demo_world
 class GameWorldService:
     def __init__(self, conn: sqlite3.Connection, llm_client: LLMClient | None = None) -> None:
         self.conn = conn
+        self.llm_client = llm_client
         self.action_parser = ActionParser(llm_client)
         self.narrator = Narrator(llm_client)
 
@@ -45,6 +47,30 @@ class GameWorldService:
     def memories(self, world_id: str, owner_id: str | None = None) -> list[dict[str, Any]]:
         self._require_world(world_id)
         return WorldGraph(self.conn).memories(world_id, owner_id)
+
+    def recall_memory(self, world_id: str, owner_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        self._require_world(world_id)
+        return [
+            {
+                "id": item.id,
+                "owner_id": item.owner_id,
+                "memory_text": item.memory_text,
+                "truth_scope": item.truth_scope,
+                "salience": item.salience,
+                "valence": item.valence,
+                "confidence": item.confidence,
+                "source_event_id": item.source_event_id,
+            }
+            for item in MemoryGraph(self.conn).recall_memory(world_id, owner_id, query, limit)
+        ]
+
+    def npc_dialogue(self, world_id: str, npc_id: str, question: str) -> dict[str, Any]:
+        self._require_world(world_id)
+        return MemoryAwareDialogue(self.conn, self.llm_client).answer(world_id, npc_id, question)
+
+    def neighbors(self, world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
+        self._require_world(world_id)
+        return WorldGraph(self.conn).query_neighbors(world_id, entity_id, rel_type)
 
     def affordances(self, world_id: str) -> list[dict[str, Any]]:
         self._require_world(world_id)

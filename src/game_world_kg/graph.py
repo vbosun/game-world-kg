@@ -131,3 +131,29 @@ class WorldGraph:
             }
             for row in self.conn.execute(f"SELECT * FROM edges WHERE {where}", params).fetchall()
         ]
+
+    def query_neighbors(self, world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
+        params: list[Any] = [world_id, entity_id, entity_id]
+        where = "world_id = ? AND valid_to_turn IS NULL AND (src_id = ? OR dst_id = ?)"
+        if rel_type is not None:
+            where += " AND rel_type = ?"
+            params.append(rel_type)
+        return [
+            {
+                "id": row["id"],
+                "src_id": row["src_id"],
+                "rel_type": row["rel_type"],
+                "dst_id": row["dst_id"],
+                "properties": from_json(row["properties_json"], {}),
+                "scope": row["scope"],
+                "valid_from_turn": row["valid_from_turn"],
+                "source_event_id": row["source_event_id"],
+            }
+            for row in self.conn.execute(
+                f"SELECT * FROM edges WHERE {where} ORDER BY rel_type, src_id, dst_id",
+                params,
+            ).fetchall()
+        ]
+
+    def query_by_scope(self, world_id: str, scope: str) -> dict[str, list[dict[str, Any]]]:
+        return self.graph(world_id, scope)

@@ -116,7 +116,10 @@ GET /worlds/demo_gate/graph
 GET /worlds/demo_gate/events
 GET /worlds/demo_gate/affordances
 GET /worlds/demo_gate/memories
+GET /worlds/demo_gate/memories/guard_alos/recall?query=通行令
+GET /worlds/demo_gate/neighbors/guard_alos
 POST /worlds/demo_gate/turn
+POST /worlds/demo_gate/npc/guard_alos/dialogue
 POST /worlds/demo_gate/replay
 ```
 
@@ -126,6 +129,14 @@ POST /worlds/demo_gate/replay
 curl -X POST http://127.0.0.1:8000/worlds/demo_gate/turn \
   -H "Content-Type: application/json" \
   -d '{"player_input":"我把通行令递给守卫，问他能不能放我进去"}'
+```
+
+询问 NPC 记忆：
+
+```bash
+curl -X POST http://127.0.0.1:8000/worlds/demo_gate/npc/guard_alos/dialogue \
+  -H "Content-Type: application/json" \
+  -d '{"question":"你记得我做过什么吗"}'
 ```
 
 运行回归测试：

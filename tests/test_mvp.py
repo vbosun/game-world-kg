@@ -159,3 +159,45 @@ def test_replay_does_not_call_llm() -> None:
 
     assert fake_llm.json_calls == json_calls
     assert fake_llm.text_calls == text_calls
+
+
+def test_npc_dialogue_recalls_only_own_memory(service: GameWorldService) -> None:
+    service.turn(DEMO_WORLD_ID, "我向守卫出示通行令")
+
+    answer = service.npc_dialogue(DEMO_WORLD_ID, "guard_alos", "你记得我做过什么吗")
+
+    assert "通行令" in answer["answer"]
+    assert any("通行令" in memory["memory_text"] for memory in answer["memories"])
+
+
+def test_npc_dialogue_does_not_read_private_canonical_state(service: GameWorldService) -> None:
+    service.turn(DEMO_WORLD_ID, "村里有人说玩家偷了钥匙")
+
+    answer = service.npc_dialogue(DEMO_WORLD_ID, "guard_alos", "你知道银钥匙在哪里吗")
+
+    assert "guard_alos" not in answer["answer"]
+    assert "银钥匙在守卫" not in answer["answer"]
+    assert answer["memories"] == []
+    assert service.state(DEMO_WORLD_ID)["silver_key"]["holder"] == "guard_alos"
+
+
+def test_rumor_recall_is_separate_from_npc_memory(service: GameWorldService) -> None:
+    service.turn(DEMO_WORLD_ID, "村里有人说玩家偷了钥匙")
+
+    village_recall = service.recall_memory(DEMO_WORLD_ID, "village", "玩家偷钥匙")
+    guard_recall = service.recall_memory(DEMO_WORLD_ID, "guard_alos", "玩家偷钥匙")
+
+    assert village_recall[0]["truth_scope"] == "rumor"
+    assert guard_recall == []
+    assert service.state(DEMO_WORLD_ID)["silver_key"]["holder"] == "guard_alos"
+
+
+def test_world_graph_neighbors_query(service: GameWorldService) -> None:
+    service.turn(DEMO_WORLD_ID, "我向守卫出示通行令")
+
+    neighbors = service.neighbors(DEMO_WORLD_ID, "guard_alos")
+    rels = {(edge["src_id"], edge["rel_type"], edge["dst_id"]) for edge in neighbors}
+
+    assert ("guard_alos", "LOCATED_AT", "village_gate") in rels
+    assert ("guard_alos", "OWNS", "pass_token") in rels
+    assert ("guard_alos", "TRUSTS", "player") in rels

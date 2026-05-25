@@ -21,6 +21,10 @@ class ReplayRequest(BaseModel):
     to_turn: int | None = None
 
 
+class DialogueRequest(BaseModel):
+    question: str
+
+
 def create_app(db_path: str | None = None) -> FastAPI:
     app = FastAPI(title="Game World KG MVP")
     resolved_path = db_path or os.getenv("GAME_WORLD_KG_DB", "game_world_kg.sqlite3")
@@ -53,6 +57,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/worlds/{world_id}/memories")
     def get_memories(world_id: str, owner_id: str | None = None) -> list[dict[str, Any]]:
         return _handle(lambda: service.memories(world_id, owner_id))
+
+    @app.get("/worlds/{world_id}/memories/{owner_id}/recall")
+    def recall_memory(world_id: str, owner_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        return _handle(lambda: service.recall_memory(world_id, owner_id, query, limit))
+
+    @app.get("/worlds/{world_id}/neighbors/{entity_id}")
+    def get_neighbors(world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
+        return _handle(lambda: service.neighbors(world_id, entity_id, rel_type))
+
+    @app.post("/worlds/{world_id}/npc/{npc_id}/dialogue")
+    def npc_dialogue(world_id: str, npc_id: str, request: DialogueRequest) -> dict[str, Any]:
+        return _handle(lambda: service.npc_dialogue(world_id, npc_id, request.question))
 
     @app.post("/worlds/{world_id}/turn")
     def post_turn(world_id: str, request: TurnRequest) -> dict[str, Any]:
