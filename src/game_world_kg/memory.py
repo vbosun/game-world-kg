@@ -15,6 +15,9 @@ class MemoryHit:
     owner_id: str
     memory_text: str
     truth_scope: str
+    scope_key: str
+    layer: str
+    memory_kind: str
     salience: float
     valence: float
     confidence: float
@@ -40,6 +43,9 @@ class MemoryGraph:
                 owner_id=memory["owner_id"],
                 memory_text=memory["memory_text"],
                 truth_scope=memory["truth_scope"],
+                scope_key=memory.get("scope_key") or memory["truth_scope"],
+                layer=memory.get("layer", "episodic"),
+                memory_kind=memory.get("memory_kind", "generic"),
                 salience=memory["salience"],
                 valence=memory["valence"],
                 confidence=memory["confidence"],
@@ -63,6 +69,9 @@ class MemoryAwareDialogue:
                 "id": item.id,
                 "memory_text": item.memory_text,
                 "truth_scope": item.truth_scope,
+                "scope_key": item.scope_key,
+                "layer": item.layer,
+                "memory_kind": item.memory_kind,
                 "salience": item.salience,
                 "confidence": item.confidence,
                 "source_event_id": item.source_event_id,
@@ -86,7 +95,7 @@ class MemoryAwareDialogue:
             scoped_hits = [
                 hit
                 for hit in chroma_hits
-                if hit["metadata"].get("owner_id") == npc_id and hit["metadata"].get("scope") in {"npc", "rumor", "faction"}
+                if hit["metadata"].get("owner_id") == npc_id and _is_dialogue_scope(hit["metadata"], npc_id)
             ]
             if scoped_hits:
                 return [
@@ -95,6 +104,9 @@ class MemoryAwareDialogue:
                         owner_id=npc_id,
                         memory_text=hit["text"],
                         truth_scope=hit["metadata"].get("scope", "npc"),
+                        scope_key=hit["metadata"].get("scope_key") or hit["metadata"].get("scope", "npc"),
+                        layer=hit["metadata"].get("layer", "episodic"),
+                        memory_kind=hit["metadata"].get("memory_kind", "generic"),
                         salience=float(hit["metadata"].get("salience", 0.5)),
                         valence=float(hit["metadata"].get("valence", 0)),
                         confidence=float(hit["metadata"].get("confidence", 1.0)),
@@ -144,3 +156,9 @@ def _keyword_score(query: str, text: str) -> float:
         if token in query and token in text:
             score += 1.0
     return score
+
+
+def _is_dialogue_scope(metadata: dict[str, Any], npc_id: str) -> bool:
+    scope = metadata.get("scope")
+    scope_key = metadata.get("scope_key") or scope
+    return scope in {"npc", "rumor", "faction"} or scope_key in {f"npc_belief:{npc_id}", "semantic_shared"} or str(scope_key).startswith("rumor:")

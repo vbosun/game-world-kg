@@ -135,9 +135,11 @@ class StateProjector:
             """
             INSERT INTO memories(
                 id, world_id, owner_id, source_event_id, memory_text, truth_scope,
-                salience, valence, confidence, last_recalled_turn, evidence_refs_json
+                scope_key, layer, memory_kind, valid_from_turn, valid_to_turn,
+                supersedes_memory_id, merged_from_json, salience, valence, confidence,
+                last_recalled_turn, evidence_refs_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
             """,
             (
                 f"mem_{uuid4().hex}",
@@ -146,6 +148,13 @@ class StateProjector:
                 payload.get("source_event_id", event.id),
                 payload["memory_text"],
                 payload.get("truth_scope", "npc"),
+                payload.get("scope_key") or payload.get("truth_scope", "npc"),
+                payload.get("layer", "episodic"),
+                payload.get("memory_kind", "generic"),
+                payload.get("valid_from_turn", event.turn_index),
+                payload.get("valid_to_turn"),
+                payload.get("supersedes_memory_id"),
+                to_json(payload.get("merged_from", [])),
                 payload.get("salience", 0.5),
                 payload.get("valence", 0),
                 payload.get("confidence", 1.0),
@@ -279,6 +288,8 @@ class KuzuProjector:
                     "properties": from_json(row["properties_json"], {}),
                 }
             )
+        for row in self.conn.execute("SELECT * FROM memories WHERE world_id = ?", (world_id,)).fetchall():
+            self.store.upsert_memory(_memory_node_payload(row))
         for event in EventLog(self.conn).list(world_id):
             self.store.upsert_event(_event_node_payload(event))
         max_turn = _max_event_turn(self.conn, world_id)
@@ -331,6 +342,24 @@ class KuzuProjector:
             self.store.upsert_relation(
                 _relation_payload(world_id, data["from"], "CONNECTS", data["to"], event_id, payload.get("turn_index", 0), data.get("properties", {}))
             )
+        elif event_type == "ADD_MEMORY":
+            data = payload["payload"]
+            self.store.upsert_memory(
+                {
+                    "id": event_id,
+                    "world_id": world_id,
+                    "owner_id": data.get("owner_id"),
+                    "truth_scope": data.get("truth_scope", "npc"),
+                    "scope_key": data.get("scope_key") or data.get("truth_scope", "npc"),
+                    "layer": data.get("layer", "episodic"),
+                    "memory_kind": data.get("memory_kind", "generic"),
+                    "salience": data.get("salience", 0.5),
+                    "valence": data.get("valence", 0),
+                    "confidence": data.get("confidence", 1.0),
+                    "memory_text": data.get("memory_text", ""),
+                    "source_event_id": data.get("source_event_id", event_id),
+                }
+            )
 
 
 class ChromaProjector:
@@ -377,6 +406,9 @@ class ChromaProjector:
                     "world_id": row["world_id"],
                     "owner_id": row["owner_id"],
                     "scope": row["truth_scope"],
+                    "scope_key": row["scope_key"] or row["truth_scope"],
+                    "layer": row["layer"],
+                    "memory_kind": row["memory_kind"],
                     "source_event_id": row["source_event_id"],
                     "salience": row["salience"],
                     "valence": row["valence"],
@@ -422,6 +454,9 @@ class ChromaProjector:
                 metadata | {
                     "owner_id": data.get("owner_id"),
                     "scope": data.get("truth_scope", "npc"),
+                    "scope_key": data.get("scope_key") or data.get("truth_scope", "npc"),
+                    "layer": data.get("layer", "episodic"),
+                    "memory_kind": data.get("memory_kind", "generic"),
                     "salience": data.get("salience", 0.5),
                     "valence": data.get("valence", 0),
                     "confidence": data.get("confidence", 1.0),
@@ -461,6 +496,23 @@ def _event_node_payload(event: EventRecord) -> dict[str, Any]:
         "turn_index": event.turn_index,
         "actor_id": event.actor_id,
         "payload": event.payload,
+    }
+
+
+def _memory_node_payload(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "world_id": row["world_id"],
+        "owner_id": row["owner_id"],
+        "truth_scope": row["truth_scope"],
+        "scope_key": row["scope_key"] or row["truth_scope"],
+        "layer": row["layer"],
+        "memory_kind": row["memory_kind"],
+        "salience": row["salience"],
+        "valence": row["valence"],
+        "confidence": row["confidence"],
+        "memory_text": row["memory_text"],
+        "source_event_id": row["source_event_id"],
     }
 
 

@@ -247,9 +247,10 @@
     </section>
   </main>
   <script>
-    const views = ["overview", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "tensions", "quests", "explain", "evaluation", "raw"];
+    const views = ["overview", "dialogue", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "tensions", "quests", "explain", "evaluation", "raw"];
     const labels = {
       overview: "概览",
+      dialogue: "Dialogue",
       state: "State",
       events: "Events",
       graph: "Graph",
@@ -288,7 +289,7 @@
     async function refresh() {
       const id = worldId();
       setStatus("刷新中...");
-      const [state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, affordances, tensions, quests, evaluation] = await Promise.all([
+      const [state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation] = await Promise.all([
         api(`/worlds/${id}/state`),
         api(`/worlds/${id}/events`),
         api(`/worlds/${id}/graph`),
@@ -297,12 +298,14 @@
         api(`/worlds/${id}/chroma/search/evidence?query=通行令&limit=5`),
         api(`/worlds/${id}/chroma/search/memories?owner_id=guard_alos&query=通行令&limit=5`),
         api(`/worlds/${id}/memories`),
+        api(`/worlds/${id}/memory/ops`),
+        api(`/worlds/${id}/memory/review`),
         api(`/worlds/${id}/affordances`),
         api(`/worlds/${id}/tensions`),
         api(`/worlds/${id}/quests`),
         api(`/evaluation`)
       ]);
-      Object.assign(data, { state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, affordances, tensions, quests, evaluation });
+      Object.assign(data, { state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation });
       setStatus(`已刷新 ${new Date().toLocaleTimeString()}`, "ok");
       render();
     }
@@ -331,8 +334,9 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question })
       });
+      await refresh();
       setStatus("NPC 已回答", "ok");
-      currentView = "overview";
+      currentView = "dialogue";
       render();
     }
 
@@ -402,6 +406,7 @@
       renderTabs();
       const content = document.getElementById("content");
       if (currentView === "overview") content.innerHTML = overview();
+      if (currentView === "dialogue") content.innerHTML = dialogueView();
       if (currentView === "state") content.innerHTML = stateView();
       if (currentView === "events") content.innerHTML = eventsView();
       if (currentView === "graph") content.innerHTML = graphView();
@@ -454,6 +459,30 @@
       ]));
     }
 
+    function dialogueView() {
+      const dialogueEvents = (data.events || []).filter(e => e.event_type === "NPC_DIALOGUE");
+      const lastDialogue = card("Last Dialogue", data.lastDialogue ? `<pre>${escapeHtml(JSON.stringify(data.lastDialogue, null, 2))}</pre>` : `<p class="muted">No dialogue yet.</p>`);
+      const events = card("Dialogue Events", table(["Turn", "NPC", "Question", "Answer"], dialogueEvents.map(e => [
+        e.turn_index,
+        e.payload?.npc_id || "-",
+        e.payload?.question || "-",
+        e.payload?.answer || "-"
+      ])));
+      const ops = card("Memory Ops", table(["Status", "Op", "Layer", "Scope", "Memory"], (data.memoryOps || []).map(op => [
+        op.status,
+        op.op_type,
+        op.layer,
+        op.scope_key,
+        op.memory_text
+      ])));
+      const reviews = card("Review Queue", table(["Status", "Reason", "Payload"], (data.reviewQueue || []).map(item => [
+        item.status,
+        item.reason,
+        JSON.stringify(item.payload)
+      ])));
+      return `<div class="grid">${lastDialogue}${events}${ops}${reviews}</div>`;
+    }
+
     function graphView() {
       const nodes = card("Nodes", table(["Id", "Type", "Name", "Scope"], (data.graph?.nodes || []).map(n => [n.id, n.entity_type, n.name || "-", n.scope])));
       const edges = card("Edges", table(["Src", "Rel", "Dst", "Props"], (data.graph?.edges || []).filter(e => e.valid_to_turn === null).map(e => [e.src_id, e.rel_type, e.dst_id, JSON.stringify(e.properties)])));
@@ -475,9 +504,11 @@
     }
 
     function memoriesView() {
-      return table(["Owner", "Scope", "Memory", "Source"], (data.memories || []).map(m => [
+      return table(["Owner", "Scope", "Layer", "Kind", "Memory", "Source"], (data.memories || []).map(m => [
         m.owner_id,
-        m.truth_scope,
+        m.scope_key || m.truth_scope,
+        m.layer || "-",
+        m.memory_kind || "-",
         m.memory_text,
         m.source_event_id || "-"
       ]));

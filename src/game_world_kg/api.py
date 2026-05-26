@@ -32,6 +32,11 @@ class DialogueRequest(BaseModel):
     question: str
 
 
+class ConversationTurnRequest(BaseModel):
+    npc_id: str
+    question: str
+
+
 def create_app(db_path: str | None = None) -> FastAPI:
     app = FastAPI(title="Game World KG MVP")
     storage = StorageConfig.from_env()
@@ -121,6 +126,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/worlds/{world_id}/npc/{npc_id}/dialogue")
     def npc_dialogue(world_id: str, npc_id: str, request: DialogueRequest) -> dict[str, Any]:
         return _handle(lambda: service.npc_dialogue(world_id, npc_id, request.question))
+
+    @app.post("/v1/conversation/turn")
+    def v1_conversation_turn(world_id: str, request: ConversationTurnRequest) -> dict[str, Any]:
+        return _handle(lambda: service.npc_dialogue(world_id, request.npc_id, request.question))
+
+    @app.get("/v1/memory/query")
+    def v1_memory_query(world_id: str, npc_id: str, query: str, mode: str = "roleplay", limit: int = 5) -> dict[str, Any]:
+        return _handle(lambda: service.memory_query(world_id, npc_id, query, mode, limit))
+
+    @app.get("/worlds/{world_id}/memory/ops")
+    def get_memory_ops(world_id: str, source_event_id: str | None = None) -> list[dict[str, Any]]:
+        return _handle(lambda: service.memory_ops(world_id, source_event_id))
+
+    @app.get("/worlds/{world_id}/memory/review")
+    def get_review_queue(world_id: str, status: str = "open") -> list[dict[str, Any]]:
+        return _handle(lambda: service.review_queue(world_id, status))
 
     @app.post("/worlds/{world_id}/turn")
     def post_turn(world_id: str, request: TurnRequest) -> dict[str, Any]:

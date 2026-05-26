@@ -88,11 +88,64 @@ CREATE TABLE IF NOT EXISTS memories (
     source_event_id TEXT,
     memory_text TEXT NOT NULL,
     truth_scope TEXT NOT NULL,
+    scope_key TEXT NOT NULL DEFAULT '',
+    layer TEXT NOT NULL DEFAULT 'episodic',
+    memory_kind TEXT NOT NULL DEFAULT 'generic',
+    valid_from_turn INTEGER,
+    valid_to_turn INTEGER,
+    supersedes_memory_id TEXT,
+    merged_from_json TEXT NOT NULL DEFAULT '[]',
     salience REAL NOT NULL DEFAULT 0.5,
     valence REAL NOT NULL DEFAULT 0,
     confidence REAL NOT NULL DEFAULT 1.0,
     last_recalled_turn INTEGER,
     evidence_refs_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS conversation_segments (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    source_event_id TEXT,
+    speaker_id TEXT,
+    segment_index INTEGER NOT NULL,
+    segment_kind TEXT NOT NULL DEFAULT 'dialogue',
+    text TEXT NOT NULL,
+    span_start INTEGER NOT NULL DEFAULT 0,
+    span_end INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memory_ops (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    source_event_id TEXT NOT NULL,
+    segment_id TEXT,
+    op_type TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    claim_key TEXT NOT NULL,
+    memory_text TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.5,
+    status TEXT NOT NULL DEFAULT 'candidate',
+    applied_event_id TEXT,
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    applied_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS review_queue (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    source_event_id TEXT,
+    memory_op_id TEXT,
+    reason TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS source_texts (
@@ -168,6 +221,9 @@ CREATE INDEX IF NOT EXISTS idx_events_world_turn ON events(world_id, turn_index,
 CREATE INDEX IF NOT EXISTS idx_states_world_entity ON states(world_id, entity_id);
 CREATE INDEX IF NOT EXISTS idx_edges_world_src ON edges(world_id, src_id, valid_to_turn);
 CREATE INDEX IF NOT EXISTS idx_memories_world_owner ON memories(world_id, owner_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_segments_turn ON conversation_segments(world_id, turn_id, segment_index);
+CREATE INDEX IF NOT EXISTS idx_memory_ops_source ON memory_ops(world_id, source_event_id, status);
+CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(world_id, status);
 CREATE INDEX IF NOT EXISTS idx_outbox_status_topic ON outbox(status, topic, created_at);
 CREATE INDEX IF NOT EXISTS idx_source_texts_world ON source_texts(world_id, source_type);
 CREATE INDEX IF NOT EXISTS idx_evidence_refs_world ON evidence_refs(world_id, source_id);

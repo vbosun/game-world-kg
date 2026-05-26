@@ -9,6 +9,7 @@ from .affordance import AffordanceEngine
 from .chroma_store import ChromaStore
 from .config import EmbeddingConfig, StorageConfig
 from .db import transaction
+from .dialogue_memory import DialogueMemoryPipeline
 from .events import EventLog
 from .explanation import ExplanationService
 from .graph import WorldGraph
@@ -91,6 +92,9 @@ class GameWorldService:
                     "owner_id": item.owner_id,
                     "memory_text": item.memory_text,
                     "truth_scope": item.truth_scope,
+                    "scope_key": item.scope_key,
+                    "layer": item.layer,
+                    "memory_kind": item.memory_kind,
                     "salience": item.salience,
                     "valence": item.valence,
                     "confidence": item.confidence,
@@ -152,36 +156,16 @@ class GameWorldService:
                         }
                     ],
                 )
-                memory_event = log.append(
-                    world_id,
-                    turn_id,
-                    turn["turn_index"],
-                    "ADD_MEMORY",
-                    "system",
-                    {
-                        "owner_id": npc_id,
-                        "source_event_id": dialogue_event.id,
-                        "memory_text": _dialogue_memory_text(question, recalled_memory_ids),
-                        "truth_scope": "npc",
-                        "memory_kind": "dialogue_episode",
-                        "supporting_memory_ids": recalled_memory_ids,
-                        "salience": 0.35,
-                        "valence": 0,
-                        "confidence": 1.0,
-                    },
-                    participants=[npc_id, "player"],
-                    evidence_refs=[
-                        {
-                            "source_id": dialogue_event.id,
-                            "source_type": "npc_dialogue",
-                            "span": [0, len(question)],
-                            "extractor": "dialogue_memory_summary_v1",
-                            "confidence": 1.0,
-                        }
-                    ],
-                    causal_parents=[dialogue_event.id],
+                memory_result = DialogueMemoryPipeline(self.conn).process_npc_dialogue(
+                    world_id=world_id,
+                    turn_id=turn_id,
+                    turn_index=turn["turn_index"],
+                    dialogue_event=dialogue_event,
+                    npc_id=npc_id,
+                    question=question,
+                    answer=answer["answer"],
+                    recalled_memory_ids=recalled_memory_ids,
                 )
-                StateProjector(self.conn).apply_event(memory_event)
                 created_memories = [
                     memory
                     for memory in WorldGraph(self.conn).memories(world_id, npc_id)
@@ -189,6 +173,9 @@ class GameWorldService:
                 ]
                 answer["dialogue_event_id"] = dialogue_event.id
                 answer["created_memory_ids"] = [memory["id"] for memory in created_memories]
+                answer["segments"] = memory_result["segments"]
+                answer["memory_ops"] = memory_result["memory_ops"]
+                answer["review_items"] = memory_result["review_items"]
                 return answer
 
     def neighbors(self, world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
@@ -319,6 +306,39 @@ class GameWorldService:
                 (world_id,),
             ).fetchall()
         ]
+
+    def memory_ops(self, world_id: str, source_event_id: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            return DialogueMemoryPipeline(self.conn).memory_ops(world_id, source_event_id)
+
+    def review_queue(self, world_id: str, status: str = "open") -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            return DialogueMemoryPipeline(self.conn).review_items(world_id, status)
+
+    def memory_query(self, world_id: str, npc_id: str, query: str, mode: str = "roleplay", limit: int = 5) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            hits = MemoryAwareDialogue(self.conn, self.llm_client, self.chroma_store)._recall(world_id, npc_id, query)[:limit]
+            payload = [
+                {
+                    "id": item.id,
+                    "owner_id": item.owner_id,
+                    "memory_text": item.memory_text,
+                    "truth_scope": item.truth_scope,
+                    "scope_key": item.scope_key,
+                    "layer": item.layer,
+                    "memory_kind": item.memory_kind,
+                    "salience": item.salience,
+                    "confidence": item.confidence,
+                    "source_event_id": item.source_event_id,
+                }
+                for item in hits
+            ]
+            if mode == "dev":
+                return {"world_id": world_id, "npc_id": npc_id, "query": query, "mode": mode, "memories": payload}
+            return {"npc_id": npc_id, "query": query, "memories": payload}
 
     def explain_state(self, world_id: str, entity_id: str, attr: str, scope: str = "canonical") -> dict[str, Any]:
         with self._lock:

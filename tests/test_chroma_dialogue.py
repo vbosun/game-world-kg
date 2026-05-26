@@ -55,12 +55,18 @@ def test_npc_dialogue_is_logged_and_summarized_into_npc_memory() -> None:
     assert events[-1]["event_type"] == "ADD_MEMORY"
     assert answer["dialogue_event_id"] == events[-2]["id"]
     assert answer["created_memory_ids"]
+    assert answer["segments"]
+    assert answer["memory_ops"][0]["status"] == "applied"
+    assert answer["memory_ops"][0]["scope_key"] == "npc_belief:guard_alos"
     assert events[-1]["payload"]["memory_kind"] == "dialogue_episode"
     assert events[-1]["payload"]["supporting_memory_ids"] == [memory["id"] for memory in answer["memories"]]
 
     created = [memory for memory in service.memories(DEMO_VILLAGE_WORLD_ID, "guard_alos") if memory["id"] in answer["created_memory_ids"]]
     assert created
     assert created[0]["truth_scope"] == "npc"
+    assert created[0]["scope_key"] == "npc_belief:guard_alos"
+    assert created[0]["layer"] == "episodic"
+    assert created[0]["memory_kind"] == "dialogue_episode"
     assert created[0]["source_event_id"] == answer["dialogue_event_id"]
     assert "玩家曾向我询问" in created[0]["memory_text"]
     assert "我回答" not in created[0]["memory_text"]
@@ -91,6 +97,43 @@ def test_npc_dialogue_does_not_persist_hallucinated_answer_without_memory_suppor
     assert "三杯酒" not in created[0]["memory_text"]
     assert "我回答" not in created[0]["memory_text"]
     assert "玩家曾向我询问：你记得我做过什么吗" in created[0]["memory_text"]
+
+
+def test_npc_dialogue_rumor_is_scoped_without_canonical_pollution() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    with transaction(conn):
+        seed_village_world(conn)
+    service = GameWorldService(conn)
+
+    answer = service.npc_dialogue(DEMO_VILLAGE_WORLD_ID, "tavern_keeper_mira", "你听说银钥匙的谣言了吗")
+
+    ops = answer["memory_ops"]
+    assert {op["op_type"] for op in ops} == {"ADD_MEMORY", "FLAG_RUMOR"}
+    assert any(op["scope_key"] == "rumor:village_square" and op["status"] == "applied" for op in ops)
+
+    created = [
+        memory
+        for memory in service.memories(DEMO_VILLAGE_WORLD_ID, "tavern_keeper_mira")
+        if memory["id"] in answer["created_memory_ids"]
+    ]
+    assert any(memory["truth_scope"] == "rumor" for memory in created)
+    assert service.state(DEMO_VILLAGE_WORLD_ID)["silver_key"]["holder"] == "guard_alos"
+
+
+def test_memory_query_returns_dev_metadata() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    with transaction(conn):
+        seed_village_world(conn)
+    service = GameWorldService(conn)
+    service.npc_dialogue(DEMO_VILLAGE_WORLD_ID, "guard_alos", "你记得我出示过通行令吗")
+
+    result = service.memory_query(DEMO_VILLAGE_WORLD_ID, "guard_alos", "通行令", mode="dev")
+
+    assert result["mode"] == "dev"
+    assert result["memories"]
+    assert all("scope_key" in memory for memory in result["memories"])
 
 
 def test_projector_rebuild_queries_do_not_leave_open_transaction() -> None:
