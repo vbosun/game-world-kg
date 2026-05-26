@@ -42,6 +42,7 @@
 
 - [游戏通用知识图谱研究报告](docs/research-report.md)
 - [本地 MVP 落地方案](docs/mvp-plan.md)
+- [小型本地 Demo 下一步方案](docs/local-demo-next-plan.md)
 
 严格对齐研究报告的详细设计：
 
@@ -65,6 +66,8 @@
 → affordance 变化
 → LLM 叙事
 ```
+
+下一阶段是 **Beta 0：Local Playable Demo**：把当前城门 MVP 扩展为一个 20～50 回合可试玩的小型本地 Demo，同时把 action/rule/affordance/quest 从硬编码函数升级为数据驱动模板。
 
 ## 推荐第一个 Demo
 
