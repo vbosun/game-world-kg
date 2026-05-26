@@ -42,7 +42,8 @@
 
 - [游戏通用知识图谱研究报告](docs/research-report.md)
 - [本地 MVP 落地方案](docs/mvp-plan.md)
-- [小型本地 Demo 下一步方案](docs/local-demo-next-plan.md)
+- [SQLite + Kuzu + Chroma 完整本地 Demo 方案](docs/full-local-demo-sqlite-kuzu-chroma-plan.md)
+- [小型本地 Demo 下一步方案（旧版渐进计划）](docs/local-demo-next-plan.md)
 
 严格对齐研究报告的详细设计：
 
@@ -67,20 +68,38 @@
 → LLM 叙事
 ```
 
-下一阶段是 **Beta 0：Local Playable Demo**：把当前城门 MVP 扩展为一个 20～50 回合可试玩的小型本地 Demo，同时把 action/rule/affordance/quest 从硬编码函数升级为数据驱动模板。
+下一阶段主线是 **SQLite + Kuzu + Chroma 完整本地 Demo**：严格按照研究报告，把当前城门 MVP 升级为三存储本地架构：
+
+```text
+SQLite  = 事务型事件日志 / source of truth / 状态投影 / 审计
+Kuzu    = 本地嵌入式属性图 / 世界结构图 / 时态关系查询
+Chroma  = 本地向量记忆 / 长文本证据 / 叙事与 NPC 记忆检索
+```
+
+目标是做出一个可本地运行、可试玩 30～50 回合的小型村庄 Demo，完整验证事件日志、属性图、规则引擎、Affordance、NPC 记忆、谣言、任务生成、证据检索和 replay/rollback。
 
 ## 推荐第一个 Demo
 
-先做一个极简城门场景：
+先做一个小村庄本地 Demo：
 
 ```text
-地点：村口、铁门、守卫室、内城
-人物：玩家、守卫、村长
-物品：通行令、银钥匙、钱袋
-规则：通行令/钥匙/守卫信任/撬锁影响通行
+地点：村口、铁门、守卫室、村广场、酒馆、仓库、井边、内城入口、市集摊位
+人物：玩家、守卫、酒馆老板、商人、村长、可疑旅人、仓库管理员
+物品：通行令、银钥匙、仓库钥匙、钱袋、粮袋、传闻纸条、水桶、仓库账本
+核心线：通行线、谣言线、仓库线
 ```
 
-这个场景用于验证位置、物品、关系、记忆、规则、可行动作、状态变化和事件回放。
+这个 Demo 用于验证：
+
+```text
+canonical / npc / faction / rumor 分层
+SQLite EventLog 真值源
+Kuzu 世界属性图查询
+Chroma 长文本证据和记忆检索
+ActionTemplate + RuleEngine + Affordance
+TensionScanner + QuestGenerator
+ExplanationService
+```
 
 ## 本地运行
 
