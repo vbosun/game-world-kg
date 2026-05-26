@@ -14,6 +14,7 @@ from .evaluation import run_evaluation
 from .llm import build_llm_client_from_env
 from .service import GameWorldService
 from .seed import DEMO_WORLD_ID, seed_demo_world
+from .seed_village import DEMO_VILLAGE_WORLD_ID, seed_village_world
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 DEBUG_HTML_PATH = PACKAGE_DIR / "static" / "debug.html"
@@ -42,6 +43,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     init_db(conn)
     with transaction(conn):
         seed_demo_world(conn)
+        seed_village_world(conn)
     service = GameWorldService(conn, build_llm_client_from_env(), storage)
 
     @app.post("/worlds")
@@ -118,7 +120,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "demo_world_id": DEMO_WORLD_ID}
+        return {"status": "ok", "demo_world_id": DEMO_WORLD_ID, "demo_village_world_id": DEMO_VILLAGE_WORLD_ID}
 
     @app.get("/evaluation")
     def evaluation() -> dict[str, Any]:
