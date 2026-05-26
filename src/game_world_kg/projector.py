@@ -369,6 +369,8 @@ class ChromaProjector:
                     "owner_id": row["owner_id"],
                     "scope": row["truth_scope"],
                     "source_event_id": row["source_event_id"],
+                    "salience": row["salience"],
+                    "valence": row["valence"],
                     "confidence": row["confidence"],
                 },
             )
@@ -411,6 +413,8 @@ class ChromaProjector:
                 metadata | {
                     "owner_id": data.get("owner_id"),
                     "scope": data.get("truth_scope", "npc"),
+                    "salience": data.get("salience", 0.5),
+                    "valence": data.get("valence", 0),
                     "confidence": data.get("confidence", 1.0),
                 },
             )

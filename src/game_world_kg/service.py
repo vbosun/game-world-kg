@@ -118,7 +118,8 @@ class GameWorldService:
     def npc_dialogue(self, world_id: str, npc_id: str, question: str) -> dict[str, Any]:
         with self._lock:
             self._require_world(world_id)
-            return MemoryAwareDialogue(self.conn, self.llm_client).answer(world_id, npc_id, question)
+            ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
+            return MemoryAwareDialogue(self.conn, self.llm_client, self.chroma_store).answer(world_id, npc_id, question)
 
     def neighbors(self, world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
         with self._lock:

@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from .chroma_store import ChromaStore
 from .graph import WorldGraph
 from .llm import LLMClient, LLMError
 
@@ -49,13 +50,14 @@ class MemoryGraph:
 
 
 class MemoryAwareDialogue:
-    def __init__(self, conn: sqlite3.Connection, llm_client: LLMClient | None = None) -> None:
+    def __init__(self, conn: sqlite3.Connection, llm_client: LLMClient | None = None, chroma_store: ChromaStore | None = None) -> None:
         self.conn = conn
         self.memory = MemoryGraph(conn)
         self.llm_client = llm_client
+        self.chroma_store = chroma_store
 
     def answer(self, world_id: str, npc_id: str, question: str) -> dict[str, Any]:
-        recalled = self.memory.recall_memory(world_id, npc_id, question)
+        recalled = self._recall(world_id, npc_id, question)
         memory_payload = [
             {
                 "id": item.id,
@@ -77,6 +79,30 @@ class MemoryAwareDialogue:
             "answer": answer_text,
             "memories": memory_payload,
         }
+
+    def _recall(self, world_id: str, npc_id: str, question: str) -> list[MemoryHit]:
+        if self.chroma_store is not None:
+            chroma_hits = self.chroma_store.search_memories(world_id, npc_id, question, 5)
+            scoped_hits = [
+                hit
+                for hit in chroma_hits
+                if hit["metadata"].get("owner_id") == npc_id and hit["metadata"].get("scope") in {"npc", "rumor", "faction"}
+            ]
+            if scoped_hits:
+                return [
+                    MemoryHit(
+                        id=hit["id"],
+                        owner_id=npc_id,
+                        memory_text=hit["text"],
+                        truth_scope=hit["metadata"].get("scope", "npc"),
+                        salience=float(hit["metadata"].get("salience", 0.5)),
+                        valence=float(hit["metadata"].get("valence", 0)),
+                        confidence=float(hit["metadata"].get("confidence", 1.0)),
+                        source_event_id=hit["metadata"].get("source_event_id"),
+                    )
+                    for hit in scoped_hits
+                ]
+        return self.memory.recall_memory(world_id, npc_id, question)
 
     def _llm_answer(self, npc_id: str, question: str, memories: list[dict[str, Any]], fallback: str) -> str:
         messages = [
