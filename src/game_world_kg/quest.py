@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from .seed import DEMO_WORLD_ID
+from .tension import TensionScanner
 
 if TYPE_CHECKING:
     from .service import GameWorldService
@@ -20,9 +21,10 @@ class QuestCandidate:
     reward: dict[str, Any]
     failure_consequence: dict[str, Any]
     evidence: list[dict[str, Any]]
+    tension_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "quest_id": self.quest_id,
             "title": self.title,
             "reason": self.reason,
@@ -32,6 +34,9 @@ class QuestCandidate:
             "failure_consequence": self.failure_consequence,
             "evidence": self.evidence,
         }
+        if self.tension_id is not None:
+            payload["tension_id"] = self.tension_id
+        return payload
 
 
 class QuestGenerator:
@@ -39,66 +44,12 @@ class QuestGenerator:
         self.service = service
 
     def generate(self, world_id: str = DEMO_WORLD_ID) -> list[dict[str, Any]]:
-        state = self.service.state(world_id)
-        memories = self.service.memories(world_id)
         affordances = self.service.affordances(world_id)
         quests: list[QuestCandidate] = []
-
-        trust = state.get("guard_alos", {}).get("trust.player", 0)
-        if trust < 5:
-            quests.append(
-                QuestCandidate(
-                    quest_id="quest_gain_guard_trust",
-                    title="取得守卫信任",
-                    reason="守卫信任不足，无法主动放行。",
-                    depends_on=["guard_alos.trust.player < 5"],
-                    required_state=[{"entity_id": "guard_alos", "attr": "trust.player", "operator": ">=", "value": 5}],
-                    reward={"unlock_affordance": "ask_guard_open_gate"},
-                    failure_consequence={"relation_delta": {"entity_id": "guard_alos", "attr": "hostility.player", "delta": 1}},
-                    evidence=[_state_evidence("guard_alos", "trust.player", trust)],
-                )
-            )
-
-        gate_open = state.get("iron_gate", {}).get("open") is True
-        key_holder = state.get("silver_key", {}).get("holder")
-        pass_holder = state.get("pass_token", {}).get("holder")
-        if not gate_open:
-            route = "show_pass_token" if pass_holder == "player" else "ask_guard_open_gate"
-            quests.append(
-                QuestCandidate(
-                    quest_id="quest_find_legal_entry",
-                    title="寻找合法通行方式",
-                    reason="铁门仍未打开，玩家需要钥匙、通行令或守卫放行。",
-                    depends_on=["iron_gate.open == false", f"silver_key.holder == {key_holder}"],
-                    required_state=[{"entity_id": "iron_gate", "attr": "open", "operator": "==", "value": True}],
-                    reward={"location_access": "inner_city"},
-                    failure_consequence={"state": {"entity_id": "iron_gate", "attr": "open", "value": False}},
-                    evidence=[
-                        _state_evidence("iron_gate", "open", gate_open),
-                        _state_evidence("silver_key", "holder", key_holder),
-                        _affordance_evidence(route, affordances),
-                    ],
-                )
-            )
-
-        rumor_memories = [
-            memory
-            for memory in memories
-            if memory["truth_scope"] == "rumor" and "偷了钥匙" in memory["memory_text"]
-        ]
-        if rumor_memories:
-            quests.append(
-                QuestCandidate(
-                    quest_id="quest_clear_key_theft_rumor",
-                    title="澄清偷钥匙传闻",
-                    reason="村里存在玩家偷钥匙的传闻，可能影响 NPC 行为。",
-                    depends_on=[memory["id"] for memory in rumor_memories],
-                    required_state=[{"memory_scope": "rumor", "operator": "resolved", "topic": "key_theft"}],
-                    reward={"relation_delta": {"entity_id": "guard_alos", "attr": "trust.player", "delta": 1}},
-                    failure_consequence={"relation_delta": {"entity_id": "guard_alos", "attr": "hostility.player", "delta": 1}},
-                    evidence=[_memory_evidence(memory) for memory in rumor_memories],
-                )
-            )
+        for tension in TensionScanner(self.service).scan(world_id):
+            quest = _quest_from_tension(tension, affordances)
+            if quest is not None:
+                quests.append(quest)
 
         return [quest.as_dict() for quest in quests]
 
@@ -150,6 +101,73 @@ def _affordance_evidence(action_id: str, affordances: list[dict[str, Any]]) -> d
         "available": found is not None,
         "reason": found["reason"] if found else "",
     }
+
+
+def _quest_from_tension(tension: dict[str, Any], affordances: list[dict[str, Any]]) -> QuestCandidate | None:
+    tension_id = tension["tension_id"]
+    if tension_id == "tension_guard_trust_low":
+        trust_evidence = tension["evidence"][0]
+        return QuestCandidate(
+            quest_id="quest_gain_guard_trust",
+            title="取得守卫信任",
+            reason=tension["reason"],
+            depends_on=["guard_alos.trust.player < 5"],
+            required_state=[{"entity_id": "guard_alos", "attr": "trust.player", "operator": ">=", "value": 5}],
+            reward={"unlock_affordance": "ask_guard_open_gate"},
+            failure_consequence={"relation_delta": {"entity_id": "guard_alos", "attr": "hostility.player", "delta": 1}},
+            evidence=[trust_evidence],
+            tension_id=tension_id,
+        )
+    if tension_id == "tension_locked_iron_gate":
+        route = next((action for action in ["show_pass_token", "request_access", "ask_guard_open_gate", "unlock_gate_with_key"] if any(item["action_id"] == action for item in affordances)), "show_pass_token")
+        return QuestCandidate(
+            quest_id="quest_find_legal_entry",
+            title="寻找合法通行方式",
+            reason="铁门仍未打开，玩家需要钥匙、通行令或守卫放行。",
+            depends_on=["iron_gate.open == false"],
+            required_state=[{"entity_id": "iron_gate", "attr": "open", "operator": "==", "value": True}],
+            reward={"location_access": "inner_city"},
+            failure_consequence={"state": {"entity_id": "iron_gate", "attr": "open", "value": False}},
+            evidence=tension["evidence"] + [_affordance_evidence(route, affordances)],
+            tension_id=tension_id,
+        )
+    if tension_id == "tension_key_theft_rumor":
+        return QuestCandidate(
+            quest_id="quest_clear_key_theft_rumor",
+            title="澄清偷钥匙传闻",
+            reason="村里存在玩家偷钥匙的传闻，可能影响 NPC 行为。",
+            depends_on=[item["memory_id"] for item in tension["evidence"] if item.get("source_type") == "memory"],
+            required_state=[{"memory_scope": "rumor", "operator": "resolved", "topic": "key_theft"}],
+            reward={"relation_delta": {"entity_id": "guard_alos", "attr": "trust.player", "delta": 1}},
+            failure_consequence={"relation_delta": {"entity_id": "guard_alos", "attr": "hostility.player", "delta": 1}},
+            evidence=tension["evidence"],
+            tension_id=tension_id,
+        )
+    if tension_id == "tension_warehouse_locked":
+        return QuestCandidate(
+            quest_id="quest_access_warehouse",
+            title="取得仓库调查权限",
+            reason=tension["reason"],
+            depends_on=["warehouse.locked == true"],
+            required_state=[{"entity_id": "warehouse", "attr": "locked", "operator": "==", "value": False}],
+            reward={"unlock_affordance": "inspect_warehouse"},
+            failure_consequence={"state": {"entity_id": "warehouse", "attr": "locked", "value": True}},
+            evidence=tension["evidence"],
+            tension_id=tension_id,
+        )
+    if tension_id == "tension_grain_trade_blocked":
+        return QuestCandidate(
+            quest_id="quest_investigate_grain_trade",
+            title="调查粮食交易阻滞",
+            reason=tension["reason"],
+            depends_on=["warehouse.grain_stock <= 12"],
+            required_state=[{"entity_id": "warehouse", "attr": "grain_stock", "operator": ">", "value": 12}],
+            reward={"relation_delta": {"entity_id": "village_chief", "attr": "trust.merchant_borin", "delta": 1}},
+            failure_consequence={"relation_delta": {"entity_id": "merchant_borin", "attr": "trust.player", "delta": -1}},
+            evidence=tension["evidence"],
+            tension_id=tension_id,
+        )
+    return None
 
 
 def _evidence_is_traceable(evidence: dict[str, Any]) -> bool:

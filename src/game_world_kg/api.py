@@ -74,6 +74,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_quests(world_id: str) -> list[dict[str, Any]]:
         return _handle(lambda: service.quests(world_id))
 
+    @app.get("/worlds/{world_id}/tensions")
+    def get_tensions(world_id: str) -> list[dict[str, Any]]:
+        return _handle(lambda: service.tensions(world_id))
+
     @app.get("/worlds/{world_id}/memories")
     def get_memories(world_id: str, owner_id: str | None = None) -> list[dict[str, Any]]:
         return _handle(lambda: service.memories(world_id, owner_id))

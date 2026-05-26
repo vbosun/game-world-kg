@@ -18,6 +18,7 @@ from .projector import ChromaProjector, KuzuProjector, StateProjector
 from .quest import QuestGenerator, QuestValidator
 from .rules import RuleEngine
 from .seed import DEMO_WORLD_ID, seed_demo_world
+from .tension import TensionScanner
 
 
 class GameWorldService:
@@ -142,6 +143,11 @@ class GameWorldService:
         with self._lock:
             self._require_world(world_id)
             return QuestGenerator(self).generate(world_id)
+
+    def tensions(self, world_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            return TensionScanner(self).scan(world_id)
 
     def validate_quest(self, world_id: str, quest: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
