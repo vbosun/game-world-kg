@@ -5,6 +5,14 @@ from game_world_kg.seed_village import DEMO_VILLAGE_WORLD_ID, seed_village_world
 from game_world_kg.service import GameWorldService
 
 
+class HallucinatingLLM:
+    def complete_json(self, messages, *, temperature=0):
+        return {"action_id": "talk_to_guard", "confidence": 0.9, "reason": "unused"}
+
+    def complete_text(self, messages, *, temperature=0.4):
+        return "不记得你做过什么，你上次来时只点了三杯酒，然后就匆匆走了。"
+
+
 def test_npc_dialogue_uses_chroma_owner_scoped_memory(tmp_path) -> None:
     conn = connect(":memory:")
     init_db(conn)
@@ -47,16 +55,42 @@ def test_npc_dialogue_is_logged_and_summarized_into_npc_memory() -> None:
     assert events[-1]["event_type"] == "ADD_MEMORY"
     assert answer["dialogue_event_id"] == events[-2]["id"]
     assert answer["created_memory_ids"]
+    assert events[-1]["payload"]["memory_kind"] == "dialogue_episode"
+    assert events[-1]["payload"]["supporting_memory_ids"] == [memory["id"] for memory in answer["memories"]]
 
     created = [memory for memory in service.memories(DEMO_VILLAGE_WORLD_ID, "guard_alos") if memory["id"] in answer["created_memory_ids"]]
     assert created
     assert created[0]["truth_scope"] == "npc"
     assert created[0]["source_event_id"] == answer["dialogue_event_id"]
-    assert "玩家问我" in created[0]["memory_text"]
+    assert "玩家曾向我询问" in created[0]["memory_text"]
+    assert "我回答" not in created[0]["memory_text"]
 
     follow_up = service.npc_dialogue(DEMO_VILLAGE_WORLD_ID, "guard_alos", "你记得我刚才问过什么吗")
 
-    assert any("玩家问我" in memory["memory_text"] for memory in follow_up["memories"])
+    assert any("玩家曾向我询问" in memory["memory_text"] for memory in follow_up["memories"])
+
+
+def test_npc_dialogue_does_not_persist_hallucinated_answer_without_memory_support() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    with transaction(conn):
+        seed_village_world(conn)
+    service = GameWorldService(conn, HallucinatingLLM())
+
+    answer = service.npc_dialogue(DEMO_VILLAGE_WORLD_ID, "tavern_keeper_mira", "你记得我做过什么吗")
+
+    assert answer["memories"] == []
+    assert answer["answer"] == "我不知道这件事。"
+
+    created = [
+        memory
+        for memory in service.memories(DEMO_VILLAGE_WORLD_ID, "tavern_keeper_mira")
+        if memory["id"] in answer["created_memory_ids"]
+    ]
+    assert created
+    assert "三杯酒" not in created[0]["memory_text"]
+    assert "我回答" not in created[0]["memory_text"]
+    assert "玩家曾向我询问：你记得我做过什么吗" in created[0]["memory_text"]
 
 
 def test_projector_rebuild_queries_do_not_leave_open_transaction() -> None:

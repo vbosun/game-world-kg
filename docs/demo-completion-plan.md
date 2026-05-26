@@ -31,9 +31,9 @@ evaluation summary 纳入三存储一致性与 demo_village 指标
 ```text
 NPC 对话记录采用双层结构：
 1. NPC_DIALOGUE 事件保存完整问答、参与者和召回的 memory id，作为审计记录。
-2. ADD_MEMORY 事件从本轮问答生成低 salience 的 NPC 主观记忆，source_event_id 指向 NPC_DIALOGUE。
+2. ADD_MEMORY 事件只保存低 salience 的 dialogue_episode 记忆，记录“玩家曾问过什么”和 supporting_memory_ids，source_event_id 指向 NPC_DIALOGUE。
 
-这样原始对话可回放，长期记忆可检索，同时不会把对话内容直接污染 canonical。
+这样原始对话可回放，长期记忆可检索，同时不会把 NPC 回答中的无证据新事实固化进记忆或 canonical。
 ```
 
 ## Current Status

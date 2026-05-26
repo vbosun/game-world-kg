@@ -161,8 +161,10 @@ class GameWorldService:
                     {
                         "owner_id": npc_id,
                         "source_event_id": dialogue_event.id,
-                        "memory_text": _dialogue_memory_text(question, answer["answer"]),
+                        "memory_text": _dialogue_memory_text(question, recalled_memory_ids),
                         "truth_scope": "npc",
+                        "memory_kind": "dialogue_episode",
+                        "supporting_memory_ids": recalled_memory_ids,
                         "salience": 0.35,
                         "valence": 0,
                         "confidence": 1.0,
@@ -346,8 +348,10 @@ class GameWorldService:
             raise KeyError(world_id)
 
 
-def _dialogue_memory_text(question: str, answer: str, limit: int = 240) -> str:
-    text = f"玩家问我：{question}；我回答：{answer}"
+def _dialogue_memory_text(question: str, supporting_memory_ids: list[str], limit: int = 240) -> str:
+    text = f"玩家曾向我询问：{question}"
+    if supporting_memory_ids:
+        text += "；我当时依据已有记忆作答。"
     if len(text) <= limit:
         return text
     return f"{text[: limit - 1]}…"

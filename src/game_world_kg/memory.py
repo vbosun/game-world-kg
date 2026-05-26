@@ -69,7 +69,7 @@ class MemoryAwareDialogue:
             }
             for item in recalled
         ]
-        if self.llm_client is None:
+        if not recalled or self.llm_client is None:
             answer_text = self._fallback_answer(question, recalled)
         else:
             answer_text = self._llm_answer(npc_id, question, memory_payload, self._fallback_answer(question, recalled))
