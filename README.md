@@ -43,6 +43,7 @@
 - [游戏通用知识图谱研究报告](docs/research-report.md)
 - [本地 MVP 落地方案](docs/mvp-plan.md)
 - [SQLite + Kuzu + Chroma 完整本地 Demo 方案](docs/full-local-demo-sqlite-kuzu-chroma-plan.md)
+- [WorldSpec 小世界生成器开发方案](docs/world-generator-development-plan.md)
 
 严格对齐研究报告的详细设计：
 
@@ -51,6 +52,7 @@
 - [混合抽取与图谱更新管线](docs/extraction-pipeline.md)
 - [评估体系与 PoC 计划](docs/evaluation.md)
 - [完整本地 Demo 剩余完成计划](docs/demo-completion-plan.md)
+- [NPC 对话长期 Memory Graph 下一步开发计划](docs/dialogue-memory-next-development-plan.md)
 
 ## 当前阶段
 
@@ -77,6 +79,8 @@ Chroma  = 本地向量记忆 / 长文本证据 / 叙事与 NPC 记忆检索
 ```
 
 目标是做出一个可本地运行、可试玩 30～50 回合的小型村庄 Demo，完整验证事件日志、属性图、规则引擎、Affordance、NPC 记忆、谣言、任务生成、证据检索和 replay/rollback。
+
+随后进入 **Beta 2：WorldSpec 小世界生成器**：玩家输入一个世界想法，系统生成一个小而密、可回放、可解释、可试玩、可自运行的小世界。
 
 ## 推荐第一个 Demo
 
