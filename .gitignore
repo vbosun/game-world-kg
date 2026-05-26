@@ -62,6 +62,9 @@ db.sqlite3
 db.sqlite3-journal
 game_world_kg.sqlite3
 game_world_kg.sqlite3-journal
+.data/
+.codegraph/
+.cursor/
 
 # Flask stuff:
 instance/

@@ -1,26 +1,39 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from threading import RLock
 from typing import Any
 
 from .affordance import AffordanceEngine
+from .chroma_store import ChromaStore
+from .config import EmbeddingConfig, StorageConfig
 from .db import transaction
 from .events import EventLog
 from .graph import WorldGraph
+from .kuzu_store import KuzuStore
 from .llm import ActionParser, LLMClient, Narrator
 from .memory import MemoryAwareDialogue, MemoryGraph
-from .projector import StateProjector
+from .projector import ChromaProjector, KuzuProjector, StateProjector
 from .quest import QuestGenerator, QuestValidator
 from .rules import RuleEngine
 from .seed import DEMO_WORLD_ID, seed_demo_world
 
 
 class GameWorldService:
-    def __init__(self, conn: sqlite3.Connection, llm_client: LLMClient | None = None) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        llm_client: LLMClient | None = None,
+        storage: StorageConfig | None = None,
+    ) -> None:
         self.conn = conn
         self._lock = RLock()
         self.llm_client = llm_client
+        self.storage = storage or StorageConfig.from_env()
+        self.storage.ensure_dirs()
+        self.kuzu_store = KuzuStore(self.storage.kuzu_path)
+        self.chroma_store = ChromaStore(self.storage.chroma_path, EmbeddingConfig.from_env())
         self.action_parser = ActionParser(llm_client)
         self.narrator = Narrator(llm_client)
 
@@ -46,6 +59,15 @@ class GameWorldService:
         with self._lock:
             self._require_world(world_id)
             return WorldGraph(self.conn).graph(world_id)
+
+    def kuzu_graph(self, world_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            graph = self.kuzu_store.query_current_graph(world_id)
+            if not graph["nodes"] and not graph["edges"]:
+                KuzuProjector(self.conn, self.kuzu_store).rebuild(world_id)
+                graph = self.kuzu_store.query_current_graph(world_id)
+            return graph
 
     def events(self, world_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -74,6 +96,24 @@ class GameWorldService:
                 for item in MemoryGraph(self.conn).recall_memory(world_id, owner_id, query, limit)
             ]
 
+    def search_memories(self, world_id: str, owner_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            hits = self.chroma_store.search_memories(world_id, owner_id, query, limit)
+            if not hits:
+                ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
+                hits = self.chroma_store.search_memories(world_id, owner_id, query, limit)
+            return hits
+
+    def search_evidence(self, world_id: str, query: str, scope: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            hits = self.chroma_store.search_evidence(world_id, query, scope, limit)
+            if not hits:
+                ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
+                hits = self.chroma_store.search_evidence(world_id, query, scope, limit)
+            return hits
+
     def npc_dialogue(self, world_id: str, npc_id: str, question: str) -> dict[str, Any]:
         with self._lock:
             self._require_world(world_id)
@@ -83,6 +123,15 @@ class GameWorldService:
         with self._lock:
             self._require_world(world_id)
             return WorldGraph(self.conn).query_neighbors(world_id, entity_id, rel_type)
+
+    def kuzu_neighbors(self, world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            neighbors = self.kuzu_store.query_neighbors(world_id, entity_id, rel_type)
+            if not neighbors:
+                KuzuProjector(self.conn, self.kuzu_store).rebuild(world_id)
+                neighbors = self.kuzu_store.query_neighbors(world_id, entity_id, rel_type)
+            return neighbors
 
     def affordances(self, world_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -154,6 +203,43 @@ class GameWorldService:
                 "graph": WorldGraph(self.conn).graph(world_id),
                 "memories": WorldGraph(self.conn).memories(world_id),
             }
+
+    def run_projectors(self, world_id: str) -> dict[str, Any]:
+        self._require_world(world_id)
+        with self._lock:
+            with transaction(self.conn):
+                kuzu = KuzuProjector(self.conn, self.kuzu_store).run_pending(world_id)
+                chroma = ChromaProjector(self.conn, self.chroma_store).run_pending(world_id)
+            return {
+                "world_id": world_id,
+                "projectors": [kuzu, chroma],
+                "projection_status": self.projection_status(world_id),
+            }
+
+    def rebuild_projectors(self, world_id: str) -> dict[str, Any]:
+        self._require_world(world_id)
+        with self._lock:
+            with transaction(self.conn):
+                kuzu = KuzuProjector(self.conn, self.kuzu_store).rebuild(world_id)
+                chroma = ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
+            return {
+                "world_id": world_id,
+                "projectors": [kuzu, chroma],
+                "projection_status": self.projection_status(world_id),
+            }
+
+    def projection_status(self, world_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "projector": row["projector"],
+                "projected_turn": row["projected_turn"],
+                "updated_at": row["updated_at"],
+            }
+            for row in self.conn.execute(
+                "SELECT * FROM projection_status WHERE world_id = ? ORDER BY projector",
+                (world_id,),
+            ).fetchall()
+        ]
 
     def _require_world(self, world_id: str) -> None:
         if self.conn.execute("SELECT 1 FROM worlds WHERE id = ?", (world_id,)).fetchone() is None:

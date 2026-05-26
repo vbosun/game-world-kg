@@ -31,6 +31,7 @@ class EventRecord:
     payload: dict[str, Any]
     state_deltas: list[StateDelta] = field(default_factory=list)
     evidence_refs: list[dict[str, Any]] = field(default_factory=list)
+    causal_parents: list[str] = field(default_factory=list)
 
 
 class EventLog:
@@ -68,6 +69,8 @@ class EventLog:
         participants: list[str] | None = None,
         state_deltas: list[StateDelta] | None = None,
         evidence_refs: list[dict[str, Any]] | None = None,
+        causal_parents: list[str] | None = None,
+        write_outbox: bool = True,
     ) -> EventRecord:
         row = self.conn.execute(
             "SELECT COALESCE(MAX(event_order), -1) + 1 AS next_order FROM events WHERE world_id = ? AND turn_index = ?",
@@ -77,13 +80,14 @@ class EventLog:
         event_order = int(row["next_order"])
         participants = participants or []
         evidence_refs = evidence_refs or []
+        causal_parents = causal_parents or []
         self.conn.execute(
             """
             INSERT INTO events(
                 id, world_id, turn_id, turn_index, event_order, event_type, actor_id,
-                participants_json, payload_json, evidence_refs_json, created_at
+                participants_json, payload_json, evidence_refs_json, causal_parents_json, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
@@ -96,6 +100,7 @@ class EventLog:
                 to_json(participants),
                 to_json(payload),
                 to_json(evidence_refs),
+                to_json(causal_parents),
                 utc_now(),
             ),
         )
@@ -121,7 +126,7 @@ class EventLog:
                 ),
             )
 
-        return EventRecord(
+        event = EventRecord(
             id=event_id,
             world_id=world_id,
             turn_id=turn_id,
@@ -133,7 +138,11 @@ class EventLog:
             payload=payload,
             state_deltas=stored_deltas,
             evidence_refs=evidence_refs,
+            causal_parents=causal_parents,
         )
+        if write_outbox:
+            self._append_event_outbox(event)
+        return event
 
     def list(self, world_id: str, to_turn: int | None = None) -> list[EventRecord]:
         params: list[Any] = [world_id]
@@ -174,6 +183,43 @@ class EventLog:
                         for delta in delta_rows
                     ],
                     evidence_refs=from_json(row["evidence_refs_json"], []),
+                    causal_parents=from_json(row["causal_parents_json"], []),
                 )
             )
         return events
+
+    def _append_event_outbox(self, event: EventRecord) -> None:
+        payload = {
+            "event_id": event.id,
+            "event_type": event.event_type,
+            "actor_id": event.actor_id,
+            "participants": event.participants,
+            "payload": event.payload,
+            "state_deltas": [
+                {
+                    "entity_id": delta.entity_id,
+                    "attr": delta.attr,
+                    "old_value": delta.old_value,
+                    "new_value": delta.new_value,
+                    "delta": delta.delta,
+                    "scope": delta.scope,
+                }
+                for delta in event.state_deltas
+            ],
+            "evidence_refs": event.evidence_refs,
+            "causal_parents": event.causal_parents,
+            "turn_index": event.turn_index,
+        }
+        topics = ["kuzu_graph_update", "chroma_event_upsert"]
+        if event.event_type == "ADD_MEMORY":
+            topics.append("chroma_memory_upsert")
+        if event.evidence_refs:
+            topics.append("chroma_evidence_upsert")
+        for topic in topics:
+            self.conn.execute(
+                """
+                INSERT INTO outbox(id, world_id, event_id, topic, payload_json, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (f"out_{uuid4().hex}", event.world_id, event.id, topic, to_json(payload), utc_now()),
+            )

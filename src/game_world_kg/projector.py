@@ -4,8 +4,11 @@ import sqlite3
 from typing import Any
 from uuid import uuid4
 
+from .chroma_store import ChromaStore
 from .db import from_json, to_json
 from .events import EventLog, EventRecord, StateDelta
+from .kuzu_store import KuzuStore
+from .sqlite_store import SQLiteStore
 
 
 class StateProjector:
@@ -213,3 +216,241 @@ class StateProjector:
 
 def delta(entity_id: str, attr: str, old: Any, new: Any, amount: Any = None, scope: str = "canonical") -> StateDelta:
     return StateDelta(entity_id=entity_id, attr=attr, old_value=old, new_value=new, delta=amount, scope=scope)
+
+
+class KuzuProjector:
+    projector_name = "kuzu_graph"
+    topics = {"kuzu_graph_update"}
+
+    def __init__(self, conn: sqlite3.Connection, store: KuzuStore) -> None:
+        self.conn = conn
+        self.store = store
+        self.store.init_schema()
+
+    def run_pending(self, world_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+        sqlite_store = SQLiteStore(conn=self.conn)
+        items = sqlite_store.list_pending_outbox("kuzu_graph_update", limit)
+        processed = 0
+        for item in items:
+            if world_id is not None and item["world_id"] != world_id:
+                continue
+            self._project_event_payload(item["world_id"], item["payload"])
+            sqlite_store.mark_outbox_processed(item["id"])
+            sqlite_store.set_projection_status(item["world_id"], self.projector_name, item["payload"].get("turn_index", 0))
+            processed += 1
+        return {"projector": self.projector_name, "processed": processed, "backend": self.store.backend}
+
+    def rebuild(self, world_id: str) -> dict[str, Any]:
+        self.store.clear()
+        for row in self.conn.execute("SELECT * FROM nodes WHERE world_id = ?", (world_id,)).fetchall():
+            self.store.upsert_entity(
+                {
+                    "id": row["id"],
+                    "world_id": row["world_id"],
+                    "stable_key": row["stable_key"],
+                    "entity_type": row["entity_type"],
+                    "name": row["name"],
+                    "scope": row["scope"],
+                    "version": from_json(row["properties_json"], {}).get("version", 1),
+                    "valid_from_turn": row["valid_from_turn"],
+                    "valid_to_turn": row["valid_to_turn"],
+                    "confidence": row["confidence"],
+                    "source_event_id": row["source_event_id"],
+                    "properties": from_json(row["properties_json"], {}),
+                }
+            )
+        for row in self.conn.execute("SELECT * FROM edges WHERE world_id = ?", (world_id,)).fetchall():
+            self.store.upsert_relation(
+                {
+                    "world_id": row["world_id"],
+                    "src_id": row["src_id"],
+                    "rel_type": row["rel_type"],
+                    "dst_id": row["dst_id"],
+                    "scope": row["scope"],
+                    "version": 1,
+                    "valid_from_turn": row["valid_from_turn"],
+                    "valid_to_turn": row["valid_to_turn"],
+                    "confidence": row["confidence"],
+                    "source_event_id": row["source_event_id"],
+                    "properties": from_json(row["properties_json"], {}),
+                }
+            )
+        for event in EventLog(self.conn).list(world_id):
+            self.store.upsert_event(_event_node_payload(event))
+        max_turn = _max_event_turn(self.conn, world_id)
+        SQLiteStore(conn=self.conn).set_projection_status(world_id, self.projector_name, max_turn)
+        return {"projector": self.projector_name, "rebuilt": True, "backend": self.store.backend, "projected_turn": max_turn}
+
+    def _project_event_payload(self, world_id: str, payload: dict[str, Any]) -> None:
+        event_type = payload["event_type"]
+        event_id = payload["event_id"]
+        event_node = {
+            "id": event_id,
+            "world_id": world_id,
+            "event_type": event_type,
+            "turn_index": payload.get("turn_index", 0),
+            "actor_id": payload.get("actor_id"),
+            "payload": payload.get("payload", {}),
+        }
+        self.store.upsert_event(event_node)
+        if event_type == "CREATE_ENTITY":
+            entity = payload["payload"]
+            self.store.upsert_entity(
+                {
+                    "id": entity["stable_key"],
+                    "world_id": world_id,
+                    "stable_key": entity["stable_key"],
+                    "entity_type": entity["entity_type"],
+                    "name": entity.get("name"),
+                    "scope": entity.get("scope", "canonical"),
+                    "version": entity.get("properties", {}).get("version", 1),
+                    "valid_from_turn": payload.get("turn_index", 0),
+                    "valid_to_turn": None,
+                    "confidence": entity.get("confidence", 1.0),
+                    "source_event_id": event_id,
+                    "properties": entity.get("properties", {}),
+                }
+            )
+        elif event_type == "MOVE_ENTITY":
+            data = payload["payload"]
+            self.store.upsert_relation(_relation_payload(world_id, data["entity_id"], "LOCATED_AT", data["to"], event_id, payload.get("turn_index", 0)))
+        elif event_type == "TRANSFER_ITEM":
+            data = payload["payload"]
+            self.store.upsert_relation(_relation_payload(world_id, data["to"], "OWNS", data["item_id"], event_id, payload.get("turn_index", 0)))
+        elif event_type == "CHANGE_RELATION":
+            data = payload["payload"]
+            self.store.upsert_relation(
+                _relation_payload(world_id, data["src"], data["rel"], data["dst"], event_id, payload.get("turn_index", 0), {"value": data.get("value")})
+            )
+
+
+class ChromaProjector:
+    projector_name = "chroma_vector"
+
+    def __init__(self, conn: sqlite3.Connection, store: ChromaStore) -> None:
+        self.conn = conn
+        self.store = store
+        self.store.init_collections()
+
+    def run_pending(self, world_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+        sqlite_store = SQLiteStore(conn=self.conn)
+        processed = 0
+        for topic in ["chroma_event_upsert", "chroma_evidence_upsert", "chroma_memory_upsert"]:
+            for item in sqlite_store.list_pending_outbox(topic, limit):
+                if world_id is not None and item["world_id"] != world_id:
+                    continue
+                self._project(item["topic"], item["world_id"], item["payload"])
+                sqlite_store.mark_outbox_processed(item["id"])
+                sqlite_store.set_projection_status(item["world_id"], self.projector_name, item["payload"].get("turn_index", 0))
+                processed += 1
+        return {"projector": self.projector_name, "processed": processed, "backend": self.store.backend}
+
+    def rebuild(self, world_id: str) -> dict[str, Any]:
+        self.store.clear()
+        for event in EventLog(self.conn).list(world_id):
+            payload = {
+                "event_id": event.id,
+                "event_type": event.event_type,
+                "actor_id": event.actor_id,
+                "participants": event.participants,
+                "payload": event.payload,
+                "evidence_refs": event.evidence_refs,
+                "turn_index": event.turn_index,
+            }
+            self._project("chroma_event_upsert", world_id, payload)
+            if event.evidence_refs:
+                self._project("chroma_evidence_upsert", world_id, payload)
+        for row in self.conn.execute("SELECT * FROM memories WHERE world_id = ?", (world_id,)).fetchall():
+            self.store.upsert_memory(
+                row["id"],
+                row["memory_text"],
+                {
+                    "world_id": row["world_id"],
+                    "owner_id": row["owner_id"],
+                    "scope": row["truth_scope"],
+                    "source_event_id": row["source_event_id"],
+                    "confidence": row["confidence"],
+                },
+            )
+        max_turn = _max_event_turn(self.conn, world_id)
+        SQLiteStore(conn=self.conn).set_projection_status(world_id, self.projector_name, max_turn)
+        return {"projector": self.projector_name, "rebuilt": True, "backend": self.store.backend, "projected_turn": max_turn}
+
+    def _project(self, topic: str, world_id: str, payload: dict[str, Any]) -> None:
+        metadata = {
+            "world_id": world_id,
+            "source_event_id": payload["event_id"],
+            "event_type": payload["event_type"],
+            "turn_index": payload.get("turn_index", 0),
+            "scope": "canonical",
+            "confidence": 1.0,
+        }
+        if topic == "chroma_event_upsert":
+            self.store.upsert_event_summary(
+                payload["event_id"],
+                f"{payload['event_type']} {payload.get('actor_id') or ''} {payload.get('participants', [])} {payload.get('payload', {})}",
+                metadata,
+            )
+        elif topic == "chroma_evidence_upsert":
+            for index, evidence in enumerate(payload.get("evidence_refs", [])):
+                text = evidence.get("text") or f"{payload['event_type']} evidence from {evidence.get('source_id')}"
+                self.store.upsert_source(
+                    f"{payload['event_id']}_evidence_{index}",
+                    text,
+                    metadata | {
+                        "source_id": evidence.get("source_id"),
+                        "source_type": evidence.get("source_type", "event_evidence"),
+                        "confidence": evidence.get("confidence", 1.0),
+                    },
+                )
+        elif topic == "chroma_memory_upsert":
+            data = payload.get("payload", {})
+            self.store.upsert_memory(
+                payload["event_id"],
+                data.get("memory_text", ""),
+                metadata | {
+                    "owner_id": data.get("owner_id"),
+                    "scope": data.get("truth_scope", "npc"),
+                    "confidence": data.get("confidence", 1.0),
+                },
+            )
+
+
+def _relation_payload(
+    world_id: str,
+    src_id: str,
+    rel_type: str,
+    dst_id: str,
+    event_id: str,
+    turn_index: int,
+    properties: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "world_id": world_id,
+        "src_id": src_id,
+        "rel_type": rel_type,
+        "dst_id": dst_id,
+        "scope": "canonical",
+        "version": 1,
+        "valid_from_turn": turn_index,
+        "valid_to_turn": None,
+        "confidence": 1.0,
+        "source_event_id": event_id,
+        "properties": properties or {},
+    }
+
+
+def _event_node_payload(event: EventRecord) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "world_id": event.world_id,
+        "event_type": event.event_type,
+        "turn_index": event.turn_index,
+        "actor_id": event.actor_id,
+        "payload": event.payload,
+    }
+
+
+def _max_event_turn(conn: sqlite3.Connection, world_id: str) -> int:
+    row = conn.execute("SELECT COALESCE(MAX(turn_index), 0) AS turn_index FROM events WHERE world_id = ?", (world_id,)).fetchone()
+    return int(row["turn_index"])

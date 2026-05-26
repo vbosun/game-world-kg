@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from .config import StorageConfig
 from .db import connect, init_db, transaction
 from .evaluation import run_evaluation
 from .llm import build_llm_client_from_env
@@ -32,12 +33,16 @@ class DialogueRequest(BaseModel):
 
 def create_app(db_path: str | None = None) -> FastAPI:
     app = FastAPI(title="Game World KG MVP")
-    resolved_path = db_path or os.getenv("GAME_WORLD_KG_DB", "game_world_kg.sqlite3")
+    storage = StorageConfig.from_env()
+    resolved_path = db_path or os.getenv("GAME_WORLD_KG_DB", str(storage.sqlite_path))
+    if resolved_path != ":memory:":
+        storage = StorageConfig(sqlite_path=Path(resolved_path), kuzu_path=storage.kuzu_path, chroma_path=storage.chroma_path)
+    storage.ensure_dirs()
     conn = connect(Path(resolved_path))
     init_db(conn)
     with transaction(conn):
         seed_demo_world(conn)
-    service = GameWorldService(conn, build_llm_client_from_env())
+    service = GameWorldService(conn, build_llm_client_from_env(), storage)
 
     @app.post("/worlds")
     def create_world() -> dict[str, Any]:
@@ -50,6 +55,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/worlds/{world_id}/graph")
     def get_graph(world_id: str) -> dict[str, Any]:
         return _handle(lambda: service.graph(world_id))
+
+    @app.get("/worlds/{world_id}/kuzu/graph")
+    def get_kuzu_graph(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.kuzu_graph(world_id))
 
     @app.get("/worlds/{world_id}/events")
     def get_events(world_id: str) -> list[dict[str, Any]]:
@@ -75,6 +84,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_neighbors(world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
         return _handle(lambda: service.neighbors(world_id, entity_id, rel_type))
 
+    @app.get("/worlds/{world_id}/kuzu/neighbors/{entity_id}")
+    def get_kuzu_neighbors(world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
+        return _handle(lambda: service.kuzu_neighbors(world_id, entity_id, rel_type))
+
+    @app.get("/worlds/{world_id}/chroma/search/evidence")
+    def search_evidence(world_id: str, query: str, scope: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
+        return _handle(lambda: service.search_evidence(world_id, query, scope, limit))
+
+    @app.get("/worlds/{world_id}/chroma/search/memories")
+    def search_memories(world_id: str, owner_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        return _handle(lambda: service.search_memories(world_id, owner_id, query, limit))
+
     @app.post("/worlds/{world_id}/npc/{npc_id}/dialogue")
     def npc_dialogue(world_id: str, npc_id: str, request: DialogueRequest) -> dict[str, Any]:
         return _handle(lambda: service.npc_dialogue(world_id, npc_id, request.question))
@@ -86,6 +107,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/worlds/{world_id}/replay")
     def post_replay(world_id: str, request: ReplayRequest) -> dict[str, Any]:
         return _handle(lambda: service.replay(world_id, request.to_turn))
+
+    @app.post("/worlds/{world_id}/projectors/run")
+    def post_projectors_run(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.run_projectors(world_id))
+
+    @app.post("/worlds/{world_id}/projectors/rebuild")
+    def post_projectors_rebuild(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.rebuild_projectors(world_id))
 
     @app.get("/health")
     def health() -> dict[str, str]:

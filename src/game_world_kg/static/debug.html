@@ -226,6 +226,11 @@
         <input id="replayTurn" placeholder="1">
         <button id="replayBtn" type="button">回放</button>
       </div>
+      <div class="card stack">
+        <h2>Projectors</h2>
+        <button id="projectorRunBtn" type="button">运行</button>
+        <button id="projectorRebuildBtn" class="secondary" type="button">重建</button>
+      </div>
       <div id="status"></div>
     </aside>
     <section>
@@ -234,12 +239,14 @@
     </section>
   </main>
   <script>
-    const views = ["overview", "state", "events", "graph", "memories", "affordances", "quests", "evaluation", "raw"];
+    const views = ["overview", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "quests", "evaluation", "raw"];
     const labels = {
       overview: "概览",
       state: "State",
       events: "Events",
       graph: "Graph",
+      kuzu: "Kuzu",
+      chroma: "Chroma",
       memories: "Memories",
       affordances: "Affordances",
       quests: "Quests",
@@ -271,16 +278,19 @@
     async function refresh() {
       const id = worldId();
       setStatus("刷新中...");
-      const [state, events, graph, memories, affordances, quests, evaluation] = await Promise.all([
+      const [state, events, graph, kuzuGraph, chromaEvidence, chromaMemories, memories, affordances, quests, evaluation] = await Promise.all([
         api(`/worlds/${id}/state`),
         api(`/worlds/${id}/events`),
         api(`/worlds/${id}/graph`),
+        api(`/worlds/${id}/kuzu/graph`),
+        api(`/worlds/${id}/chroma/search/evidence?query=通行令&limit=5`),
+        api(`/worlds/${id}/chroma/search/memories?owner_id=guard_alos&query=通行令&limit=5`),
         api(`/worlds/${id}/memories`),
         api(`/worlds/${id}/affordances`),
         api(`/worlds/${id}/quests`),
         api(`/evaluation`)
       ]);
-      Object.assign(data, { state, events, graph, memories, affordances, quests, evaluation });
+      Object.assign(data, { state, events, graph, kuzuGraph, chromaEvidence, chromaMemories, memories, affordances, quests, evaluation });
       setStatus(`已刷新 ${new Date().toLocaleTimeString()}`, "ok");
       render();
     }
@@ -328,6 +338,15 @@
       setStatus("回放完成", "ok");
     }
 
+    async function runProjectors(rebuild = false) {
+      const id = worldId();
+      setStatus(rebuild ? "重建投影中..." : "运行投影中...");
+      data.lastProjectors = await api(`/worlds/${id}/projectors/${rebuild ? "rebuild" : "run"}`, { method: "POST" });
+      await refresh();
+      currentView = "kuzu";
+      render();
+    }
+
     function renderTabs() {
       const tabs = document.getElementById("tabs");
       tabs.innerHTML = "";
@@ -351,6 +370,8 @@
       if (currentView === "state") content.innerHTML = stateView();
       if (currentView === "events") content.innerHTML = eventsView();
       if (currentView === "graph") content.innerHTML = graphView();
+      if (currentView === "kuzu") content.innerHTML = kuzuView();
+      if (currentView === "chroma") content.innerHTML = chromaView();
       if (currentView === "memories") content.innerHTML = memoriesView();
       if (currentView === "affordances") content.innerHTML = affordancesView();
       if (currentView === "quests") content.innerHTML = questsView();
@@ -399,6 +420,20 @@
       const nodes = card("Nodes", table(["Id", "Type", "Name", "Scope"], (data.graph?.nodes || []).map(n => [n.id, n.entity_type, n.name || "-", n.scope])));
       const edges = card("Edges", table(["Src", "Rel", "Dst", "Props"], (data.graph?.edges || []).filter(e => e.valid_to_turn === null).map(e => [e.src_id, e.rel_type, e.dst_id, JSON.stringify(e.properties)])));
       return `<div class="grid">${nodes}${edges}</div>`;
+    }
+
+    function kuzuView() {
+      const graph = data.kuzuGraph || {};
+      const status = data.lastProjectors ? card("Projection Status", `<pre>${escapeHtml(JSON.stringify(data.lastProjectors, null, 2))}</pre>`) : "";
+      const nodes = card(`Nodes (${graph.backend || "-"})`, table(["Id", "Type", "Name", "Scope"], (graph.nodes || []).map(n => [n.id, n.entity_type, n.name || "-", n.scope])));
+      const edges = card("Edges", table(["Src", "Rel", "Dst", "Props"], (graph.edges || []).map(e => [e.src_id, e.rel_type, e.dst_id, JSON.stringify(e.properties)])));
+      return `<div class="grid">${status}${nodes}${edges}</div>`;
+    }
+
+    function chromaView() {
+      const evidence = card("Evidence: 通行令", table(["Id", "Text", "Metadata"], (data.chromaEvidence || []).map(h => [h.id, h.text, JSON.stringify(h.metadata)])));
+      const memories = card("Guard Memories: 通行令", table(["Id", "Text", "Metadata"], (data.chromaMemories || []).map(h => [h.id, h.text, JSON.stringify(h.metadata)])));
+      return `<div class="grid">${evidence}${memories}</div>`;
     }
 
     function memoriesView() {
@@ -463,6 +498,8 @@
     document.getElementById("turnBtn").onclick = () => submitTurn().catch(err => setStatus(err.message, "bad"));
     document.getElementById("npcBtn").onclick = () => askNpc().catch(err => setStatus(err.message, "bad"));
     document.getElementById("replayBtn").onclick = () => replay().catch(err => setStatus(err.message, "bad"));
+    document.getElementById("projectorRunBtn").onclick = () => runProjectors(false).catch(err => setStatus(err.message, "bad"));
+    document.getElementById("projectorRebuildBtn").onclick = () => runProjectors(true).catch(err => setStatus(err.message, "bad"));
     render();
     refresh().catch(err => setStatus(err.message, "bad"));
   </script>

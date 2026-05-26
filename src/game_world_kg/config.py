@@ -21,6 +21,45 @@ def load_dotenv(path: str | Path = ".env") -> None:
 
 
 @dataclass(frozen=True)
+class StorageConfig:
+    sqlite_path: Path = Path(".data/game_world_kg.sqlite3")
+    kuzu_path: Path = Path(".data/kuzu")
+    chroma_path: Path = Path(".data/chroma")
+
+    @classmethod
+    def from_env(cls) -> "StorageConfig":
+        load_dotenv()
+        return cls(
+            sqlite_path=Path(os.getenv("GAME_WORLD_KG_DB", ".data/game_world_kg.sqlite3")),
+            kuzu_path=Path(os.getenv("GAME_WORLD_KG_KUZU_PATH", ".data/kuzu")),
+            chroma_path=Path(os.getenv("GAME_WORLD_KG_CHROMA_PATH", ".data/chroma")),
+        )
+
+    def ensure_dirs(self) -> None:
+        self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        self.kuzu_path.mkdir(parents=True, exist_ok=True)
+        self.chroma_path.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    provider: str = "mock"
+    base_url: str = "http://localhost:5001/v1"
+    model: str = "bge-m3"
+    api_key: str = ""
+
+    @classmethod
+    def from_env(cls) -> "EmbeddingConfig":
+        load_dotenv()
+        return cls(
+            provider=os.getenv("GAME_WORLD_KG_EMBEDDING_PROVIDER", "mock"),
+            base_url=os.getenv("GAME_WORLD_KG_EMBEDDING_BASE_URL", "http://localhost:5001/v1").rstrip("/"),
+            model=os.getenv("GAME_WORLD_KG_EMBEDDING_MODEL", "bge-m3"),
+            api_key=os.getenv("GAME_WORLD_KG_EMBEDDING_API_KEY", ""),
+        )
+
+
+@dataclass(frozen=True)
 class LLMConfig:
     base_url: str = "http://localhost:5001/v1"
     model: str = "qwen3"
