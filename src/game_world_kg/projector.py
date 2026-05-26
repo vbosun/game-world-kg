@@ -100,6 +100,42 @@ class StateProjector:
             ),
         )
 
+    def _apply_create_location(self, event: EventRecord) -> None:
+        self._apply_create_entity(event)
+
+    def _apply_create_character(self, event: EventRecord) -> None:
+        self._apply_create_entity(event)
+
+    def _apply_create_item(self, event: EventRecord) -> None:
+        self._apply_create_entity(event)
+
+    def _apply_create_faction(self, event: EventRecord) -> None:
+        self._apply_create_entity(event)
+
+    def _apply_create_rule(self, event: EventRecord) -> None:
+        payload = event.payload
+        rule_id = payload.get("rule_id") or payload.get("id") or event.id
+        self._insert_bootstrap_node(event, rule_id, "Rule", payload.get("name") or rule_id, payload)
+
+    def _apply_create_action_template(self, event: EventRecord) -> None:
+        payload = event.payload
+        action_id = payload["action_id"]
+        self._insert_bootstrap_node(event, action_id, "ActionTemplate", payload.get("label_template") or action_id, payload)
+
+    def _apply_add_tension(self, event: EventRecord) -> None:
+        payload = event.payload
+        tension_id = payload["id"]
+        self._insert_bootstrap_node(event, tension_id, "Tension", payload.get("description") or tension_id, payload)
+        for entity_id in payload.get("affected_entities", []):
+            self._insert_edge(event, tension_id, "AFFECTS", entity_id, {})
+
+    def _apply_start_quest(self, event: EventRecord) -> None:
+        payload = event.payload
+        quest_id = payload["id"]
+        self._insert_bootstrap_node(event, quest_id, "Quest", payload.get("title") or quest_id, payload)
+        self._insert_edge(event, quest_id, "ISSUED_BY", payload["issuer_id"], {})
+        self._insert_edge(event, quest_id, "FROM_TENSION", payload["tension_id"], {})
+
     def _apply_move_entity(self, event: EventRecord) -> None:
         entity_id = event.payload["entity_id"]
         to_location = event.payload["to"]
@@ -226,6 +262,29 @@ class StateProjector:
             ),
         )
 
+    def _insert_bootstrap_node(self, event: EventRecord, stable_key: str, entity_type: str, name: str | None, properties: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO nodes(
+                id, world_id, stable_key, entity_type, name, properties_json,
+                scope, valid_from_turn, valid_to_turn, confidence, source_event_id, evidence_refs_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'canonical', ?, NULL, 1.0, ?, ?)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                stable_key,
+                event.world_id,
+                stable_key,
+                entity_type,
+                name,
+                to_json(properties),
+                event.turn_index,
+                event.id,
+                to_json(event.evidence_refs),
+            ),
+        )
+
 
 def delta(entity_id: str, attr: str, old: Any, new: Any, amount: Any = None, scope: str = "canonical") -> StateDelta:
     return StateDelta(entity_id=entity_id, attr=attr, old_value=old, new_value=new, delta=amount, scope=scope)
@@ -308,7 +367,7 @@ class KuzuProjector:
             "payload": payload.get("payload", {}),
         }
         self.store.upsert_event(event_node)
-        if event_type == "CREATE_ENTITY":
+        if event_type in {"CREATE_ENTITY", "CREATE_LOCATION", "CREATE_CHARACTER", "CREATE_ITEM", "CREATE_FACTION"}:
             entity = payload["payload"]
             self.store.upsert_entity(
                 {
@@ -360,6 +419,46 @@ class KuzuProjector:
                     "source_event_id": data.get("source_event_id", event_id),
                 }
             )
+        elif event_type in {"CREATE_ACTION_TEMPLATE", "CREATE_RULE", "ADD_TENSION", "START_QUEST"}:
+            data = payload["payload"]
+            if event_type == "CREATE_ACTION_TEMPLATE":
+                entity_id = data["action_id"]
+                entity_type = "ActionTemplate"
+                name = data.get("label_template") or entity_id
+            elif event_type == "CREATE_RULE":
+                entity_id = data.get("rule_id") or data.get("id") or event_id
+                entity_type = "Rule"
+                name = data.get("name") or entity_id
+            elif event_type == "ADD_TENSION":
+                entity_id = data["id"]
+                entity_type = "Tension"
+                name = data.get("description") or entity_id
+            else:
+                entity_id = data["id"]
+                entity_type = "Quest"
+                name = data.get("title") or entity_id
+            self.store.upsert_entity(
+                {
+                    "id": entity_id,
+                    "world_id": world_id,
+                    "stable_key": entity_id,
+                    "entity_type": entity_type,
+                    "name": name,
+                    "scope": "canonical",
+                    "version": 1,
+                    "valid_from_turn": payload.get("turn_index", 0),
+                    "valid_to_turn": None,
+                    "confidence": 1.0,
+                    "source_event_id": event_id,
+                    "properties": data,
+                }
+            )
+            if event_type == "ADD_TENSION":
+                for affected in data.get("affected_entities", []):
+                    self.store.upsert_relation(_relation_payload(world_id, entity_id, "AFFECTS", affected, event_id, payload.get("turn_index", 0)))
+            if event_type == "START_QUEST":
+                self.store.upsert_relation(_relation_payload(world_id, entity_id, "ISSUED_BY", data["issuer_id"], event_id, payload.get("turn_index", 0)))
+                self.store.upsert_relation(_relation_payload(world_id, entity_id, "FROM_TENSION", data["tension_id"], event_id, payload.get("turn_index", 0)))
 
 
 class ChromaProjector:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -19,6 +19,8 @@ class ActionTemplate:
     reason: str
     preconditions: list[dict[str, Any]]
     effects: list[dict[str, Any]]
+    target_selector: dict[str, Any] = field(default_factory=dict)
+    arg_schema: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -38,13 +40,15 @@ class ActionTemplateStore:
         self.conn.execute(
             """
             INSERT INTO action_templates(
-                id, world_id, action_id, label, target_id, risk, reason,
+                id, world_id, action_id, label, target_id, target_selector_json, arg_schema_json, risk, reason,
                 preconditions_json, effects_json, enabled, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
             ON CONFLICT(world_id, action_id) DO UPDATE SET
                 label = excluded.label,
                 target_id = excluded.target_id,
+                target_selector_json = excluded.target_selector_json,
+                arg_schema_json = excluded.arg_schema_json,
                 risk = excluded.risk,
                 reason = excluded.reason,
                 preconditions_json = excluded.preconditions_json,
@@ -57,6 +61,8 @@ class ActionTemplateStore:
                 template.action_id,
                 template.label,
                 template.target_id,
+                to_json(template.target_selector),
+                to_json(template.arg_schema),
                 template.risk,
                 template.reason,
                 to_json(template.preconditions),
@@ -243,6 +249,11 @@ class EffectExecutor:
                 "confidence": effect.get("confidence", 1.0),
             }
             return "ADD_MEMORY", payload, [owner_id], []
+        if kind == "add_conversation_event":
+            actor = self._bind(effect.get("actor", "$actor"), bindings)
+            target = self._bind(effect.get("target", "$target"), bindings)
+            topic = effect.get("topic", bindings.get("topic", ""))
+            return "CONVERSATION_EVENT", {"actor": actor, "target": target, "topic": topic}, [actor, target], []
         raise ValueError(f"unknown effect type: {kind}")
 
     @staticmethod
@@ -293,12 +304,63 @@ class ActionTemplateEngine:
             if template.action_id == "move_to_location":
                 affordances.extend(self._movement_affordances(world_id, actor_id, template))
                 continue
+            if actor_id == "player" and template.action_id in {"patrol", "report_to_faction"}:
+                continue
+            if self._uses_target(template):
+                affordances.extend(self._targeted_affordances(world_id, actor_id, template))
+                continue
             if all(self.predicates.evaluate(world_id, item, bindings) for item in template.preconditions):
                 affordances.append(
                     {
                         "action_id": template.action_id,
                         "label": template.label,
                         "target_id": template.target_id or "",
+                        "risk": template.risk,
+                        "reason": template.reason,
+                    }
+                )
+        return affordances
+
+    @staticmethod
+    def _uses_target(template: ActionTemplate) -> bool:
+        serialized = to_json({"preconditions": template.preconditions, "effects": template.effects, "target_id": template.target_id})
+        return "$target" in serialized
+
+    def _targeted_affordances(self, world_id: str, actor_id: str, template: ActionTemplate) -> list[dict[str, Any]]:
+        current = self.predicates.state.get_state(world_id, actor_id, "location")
+        if current is None:
+            return []
+        selector_type = template.target_selector.get("entity_type")
+        target_rows = self.predicates.conn.execute(
+            """
+            SELECT n.id, n.name, n.entity_type
+            FROM nodes n
+            WHERE n.world_id = ?
+              AND n.valid_to_turn IS NULL
+              AND n.entity_type IN ('Character', 'Item', 'Location', 'Faction')
+            ORDER BY n.entity_type, n.name
+            """,
+            (world_id,),
+        ).fetchall()
+        affordances: list[dict[str, Any]] = []
+        for row in target_rows:
+            target_id = row["id"]
+            bindings = {"actor": actor_id, "target": target_id}
+            if target_id == actor_id:
+                continue
+            if selector_type and row["entity_type"] != selector_type:
+                continue
+            if row["entity_type"] == "Location" and target_id == current and template.action_id == "inspect":
+                label = template.label.replace("{target}", row["name"] or target_id)
+                affordances.append({"action_id": template.action_id, "label": label, "target_id": target_id, "risk": template.risk, "reason": template.reason})
+                continue
+            if all(self.predicates.evaluate(world_id, item, bindings) for item in template.preconditions):
+                label = template.label.replace("{target}", row["name"] or target_id)
+                affordances.append(
+                    {
+                        "action_id": template.action_id,
+                        "label": label,
+                        "target_id": target_id,
                         "risk": template.risk,
                         "reason": template.reason,
                     }
@@ -350,6 +412,8 @@ def _row_to_template(row: sqlite3.Row) -> ActionTemplate:
         action_id=row["action_id"],
         label=row["label"],
         target_id=row["target_id"],
+        target_selector=from_json(row["target_selector_json"], {}),
+        arg_schema=from_json(row["arg_schema_json"], {}),
         risk=row["risk"],
         reason=row["reason"],
         preconditions=from_json(row["preconditions_json"], []),

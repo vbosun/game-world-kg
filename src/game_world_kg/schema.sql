@@ -208,6 +208,8 @@ CREATE TABLE IF NOT EXISTS action_templates (
     action_id TEXT NOT NULL,
     label TEXT NOT NULL,
     target_id TEXT,
+    target_selector_json TEXT NOT NULL DEFAULT '{}',
+    arg_schema_json TEXT NOT NULL DEFAULT '{}',
     risk TEXT NOT NULL DEFAULT 'low',
     reason TEXT NOT NULL DEFAULT '',
     preconditions_json TEXT NOT NULL DEFAULT '[]',
@@ -215,6 +217,27 @@ CREATE TABLE IF NOT EXISTS action_templates (
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     UNIQUE(world_id, action_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_specs (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    spec_json TEXT NOT NULL,
+    spec_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'candidate',
+    validation_report_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bootstrap_runs (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    world_spec_id TEXT NOT NULL,
+    spec_hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    event_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    UNIQUE(world_id, spec_hash, status)
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_world_turn ON events(world_id, turn_index, event_order);
@@ -228,3 +251,5 @@ CREATE INDEX IF NOT EXISTS idx_outbox_status_topic ON outbox(status, topic, crea
 CREATE INDEX IF NOT EXISTS idx_source_texts_world ON source_texts(world_id, source_type);
 CREATE INDEX IF NOT EXISTS idx_evidence_refs_world ON evidence_refs(world_id, source_id);
 CREATE INDEX IF NOT EXISTS idx_action_templates_world ON action_templates(world_id, enabled);
+CREATE INDEX IF NOT EXISTS idx_world_specs_world ON world_specs(world_id, spec_hash);
+CREATE INDEX IF NOT EXISTS idx_bootstrap_runs_world ON bootstrap_runs(world_id, spec_hash);

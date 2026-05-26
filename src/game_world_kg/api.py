@@ -37,6 +37,15 @@ class ConversationTurnRequest(BaseModel):
     question: str
 
 
+class WorldSpecGenerateRequest(BaseModel):
+    idea: str
+    repair_attempts: int = 2
+
+
+class WorldSpecPayloadRequest(BaseModel):
+    spec: dict[str, Any]
+
+
 def create_app(db_path: str | None = None) -> FastAPI:
     app = FastAPI(title="Game World KG MVP")
     storage = StorageConfig.from_env()
@@ -82,6 +91,46 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/worlds/{world_id}/tensions")
     def get_tensions(world_id: str) -> list[dict[str, Any]]:
         return _handle(lambda: service.tensions(world_id))
+
+    @app.post("/v1/worldspec/generate")
+    def v1_worldspec_generate(request: WorldSpecGenerateRequest) -> dict[str, Any]:
+        return _handle(lambda: service.generate_worldspec(request.idea, request.repair_attempts))
+
+    @app.post("/v1/worldspec/validate")
+    def v1_worldspec_validate(request: WorldSpecPayloadRequest) -> dict[str, Any]:
+        return _handle(lambda: service.validate_worldspec(request.spec))
+
+    @app.post("/v1/worldspec/repair")
+    def v1_worldspec_repair(request: WorldSpecPayloadRequest) -> dict[str, Any]:
+        return _handle(lambda: service.repair_worldspec(request.spec))
+
+    @app.post("/v1/worldspec/bootstrap")
+    def v1_worldspec_bootstrap(request: WorldSpecPayloadRequest) -> dict[str, Any]:
+        return _handle(lambda: service.bootstrap_worldspec(request.spec))
+
+    @app.get("/worlds/{world_id}/worldspec")
+    def get_worldspec(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.worldspec(world_id))
+
+    @app.post("/worlds/{world_id}/tick")
+    def post_world_tick(world_id: str, limit: int = 3) -> dict[str, Any]:
+        return _handle(lambda: service.tick_world(world_id, limit))
+
+    @app.post("/worlds/{world_id}/npc/{npc_id}/tick")
+    def post_npc_tick(world_id: str, npc_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.tick_npc(world_id, npc_id))
+
+    @app.get("/worlds/{world_id}/planner/npcs/{npc_id}/context")
+    def get_planner_context(world_id: str, npc_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.planner_context(world_id, npc_id))
+
+    @app.get("/worlds/{world_id}/drama/foreground")
+    def get_drama_foreground(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.drama_foreground(world_id))
+
+    @app.get("/worlds/{world_id}/evaluation/worldgen")
+    def get_worldgen_evaluation(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.worldgen_evaluation(world_id))
 
     @app.get("/worlds/{world_id}/explain/state/{entity_id}/{attr}")
     def explain_state(world_id: str, entity_id: str, attr: str, scope: str = "canonical") -> dict[str, Any]:

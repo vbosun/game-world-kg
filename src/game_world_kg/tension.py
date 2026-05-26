@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from .db import from_json
+
 if TYPE_CHECKING:
     from .service import GameWorldService
 
@@ -110,7 +112,34 @@ class TensionScanner:
                 )
             )
 
-        return [tension.as_dict() for tension in tensions]
+        generated = [tension.as_dict() for tension in tensions]
+        known = {item["tension_id"] for item in generated}
+        for row in self.service.conn.execute(
+            """
+            SELECT properties_json FROM nodes
+            WHERE world_id = ? AND entity_type = 'Tension' AND valid_to_turn IS NULL
+            ORDER BY id
+            """,
+            (world_id,),
+        ).fetchall():
+            payload = from_json(row["properties_json"], {})
+            tension_id = payload.get("id")
+            if not tension_id or tension_id in known:
+                continue
+            generated.append(
+                {
+                    "tension_id": tension_id,
+                    "type": payload.get("tension_type", "worldspec"),
+                    "reason": payload.get("description", ""),
+                    "description": payload.get("description", ""),
+                    "evidence": payload.get("evidence", []),
+                    "affected_entities": payload.get("affected_entities", []),
+                    "suggested_actions": payload.get("suggested_actions", []),
+                    "priority": payload.get("priority", 0.5),
+                }
+            )
+            known.add(tension_id)
+        return generated
 
 
 def _state_evidence(entity_id: str, attr: str, value: Any) -> dict[str, Any]:

@@ -49,6 +49,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _add_column(conn, "memories", "valid_to_turn", "INTEGER")
     _add_column(conn, "memories", "supersedes_memory_id", "TEXT")
     _add_column(conn, "memories", "merged_from_json", "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, "action_templates", "target_selector_json", "TEXT NOT NULL DEFAULT '{}'")
+    _add_column(conn, "action_templates", "arg_schema_json", "TEXT NOT NULL DEFAULT '{}'")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS conversation_segments (
@@ -116,6 +118,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             action_id TEXT NOT NULL,
             label TEXT NOT NULL,
             target_id TEXT,
+            target_selector_json TEXT NOT NULL DEFAULT '{}',
+            arg_schema_json TEXT NOT NULL DEFAULT '{}',
             risk TEXT NOT NULL DEFAULT 'low',
             reason TEXT NOT NULL DEFAULT '',
             preconditions_json TEXT NOT NULL DEFAULT '[]',
@@ -127,6 +131,35 @@ def _migrate(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_action_templates_world ON action_templates(world_id, enabled)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS world_specs (
+            id TEXT PRIMARY KEY,
+            world_id TEXT NOT NULL,
+            spec_json TEXT NOT NULL,
+            spec_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'candidate',
+            validation_report_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bootstrap_runs (
+            id TEXT PRIMARY KEY,
+            world_id TEXT NOT NULL,
+            world_spec_id TEXT NOT NULL,
+            spec_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            event_ids_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            UNIQUE(world_id, spec_hash, status)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_world_specs_world ON world_specs(world_id, spec_hash)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_bootstrap_runs_world ON bootstrap_runs(world_id, spec_hash)")
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

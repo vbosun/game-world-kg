@@ -6,6 +6,7 @@ from typing import Any
 
 from .seed import DEMO_WORLD_ID
 from .tension import TensionScanner
+from .db import from_json
 
 if TYPE_CHECKING:
     from .service import GameWorldService
@@ -46,12 +47,18 @@ class QuestGenerator:
     def generate(self, world_id: str = DEMO_WORLD_ID) -> list[dict[str, Any]]:
         affordances = self.service.affordances(world_id)
         quests: list[QuestCandidate] = []
+        worldspec_quests = _worldspec_quests(self.service.conn, world_id)
         for tension in TensionScanner(self.service).scan(world_id):
             quest = _quest_from_tension(tension, affordances)
             if quest is not None:
                 quests.append(quest)
 
-        return [quest.as_dict() for quest in quests]
+        generated = [quest.as_dict() for quest in quests]
+        known = {quest["quest_id"] for quest in generated}
+        for quest in worldspec_quests:
+            if quest["quest_id"] not in known:
+                generated.append(quest)
+        return generated
 
 
 class QuestValidator:
@@ -196,3 +203,35 @@ def _effect_is_grounded(effect: dict[str, Any], entity_ids: set[str]) -> bool:
     if nested:
         return nested.get("entity_id") in entity_ids and bool(nested.get("attr"))
     return False
+
+
+def _worldspec_quests(conn: Any, world_id: str) -> list[dict[str, Any]]:
+    quests: list[dict[str, Any]] = []
+    for row in conn.execute(
+        """
+        SELECT properties_json FROM nodes
+        WHERE world_id = ? AND entity_type = 'Quest' AND valid_to_turn IS NULL
+        ORDER BY id
+        """,
+        (world_id,),
+    ).fetchall():
+        payload = from_json(row["properties_json"], {})
+        if not payload:
+            continue
+        quests.append(
+            {
+                "quest_id": payload["id"],
+                "title": payload["title"],
+                "reason": f"由 tension {payload['tension_id']} 触发。",
+                "depends_on": [payload["tension_id"]],
+                "required_state": [{"objective_type": item["type"], "entity_id": item["target"], "attr": "objective"} for item in payload.get("objectives", [])],
+                "reward": payload.get("rewards", [{}])[0] if payload.get("rewards") else {},
+                "failure_consequence": payload.get("failure_consequences", [{}])[0] if payload.get("failure_consequences") else {},
+                "evidence": payload.get("evidence") or [{"source_type": "tension", "tension_id": payload["tension_id"]}],
+                "tension_id": payload["tension_id"],
+                "objectives": payload.get("objectives", []),
+                "rewards": payload.get("rewards", []),
+                "failure_consequences": payload.get("failure_consequences", []),
+            }
+        )
+    return quests
