@@ -20,4 +20,16 @@ def test_debug_panel_file_references_core_endpoints() -> None:
     assert "/worlds/${id}/state" in html
     assert "/worlds/${id}/events" in html
     assert "/worlds/${id}/quests" in html
+    assert "/worlds/${id}/tensions" in html
+    assert "/worlds/${id}/projectors/status" in html
+    assert "/worlds/${id}/explain/state/${entity}/${attr" in html
     assert "/evaluation" in html
+
+
+def test_projection_status_endpoint_is_available() -> None:
+    from fastapi.testclient import TestClient
+
+    response = TestClient(create_app(":memory:")).get("/worlds/demo_village/projectors/status")
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)

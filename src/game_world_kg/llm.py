@@ -13,6 +13,7 @@ from .rules import RuleResult
 
 
 ALLOWED_ACTION_IDS = {
+    "move_to_location",
     "talk_to_guard",
     "show_pass_token",
     "unlock_gate_with_key",
@@ -22,6 +23,7 @@ ALLOWED_ACTION_IDS = {
     "enter_inner_city",
     "request_access",
     "ask_about_rumor",
+    "clarify_rumor",
     "inspect_warehouse",
     "request_warehouse_access",
     "trade_grain",
@@ -36,6 +38,7 @@ ALLOWED_ACTION_IDS = {
 
 class ActionCandidate(BaseModel):
     action_id: str
+    target_id: str | None = None
     confidence: float = Field(ge=0, le=1)
     reason: str = ""
 
@@ -108,8 +111,9 @@ class ActionParser:
                     "你是游戏行动解析器。只输出 JSON 对象，不要解释。"
                     "从玩家输入中选择一个候选 action_id。"
                     f"action_id 只能是: {', '.join(sorted(ALLOWED_ACTION_IDS))}。"
+                    "如果选择 move_to_location，必须从 affordances 中复制目标 target_id。"
                     "不要决定行动是否合法，规则引擎会裁判。"
-                    "格式: {\"action_id\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}"
+                    "格式: {\"action_id\":\"...\",\"target_id\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}"
                 ),
             },
             {

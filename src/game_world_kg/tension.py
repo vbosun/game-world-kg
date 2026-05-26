@@ -70,7 +70,8 @@ class TensionScanner:
             for memory in memories
             if memory["truth_scope"] == "rumor" and ("偷了钥匙" in memory["memory_text"] or "银钥匙" in memory["memory_text"])
         ]
-        if rumor_memories:
+        rumor_resolved = state.get("silver_key", {}).get("rumor.rumor_resolved") is True
+        if rumor_memories and not rumor_resolved:
             tensions.append(
                 Tension(
                     tension_id="tension_key_theft_rumor",
@@ -96,7 +97,8 @@ class TensionScanner:
             )
 
         grain_stock = warehouse_state.get("grain_stock")
-        if grain_stock is not None and grain_stock <= 12:
+        grain_trade_completed = state.get("grain_bag", {}).get("trade_completed") is True
+        if grain_stock is not None and grain_stock <= 12 and not grain_trade_completed:
             tensions.append(
                 Tension(
                     tension_id="tension_grain_trade_blocked",

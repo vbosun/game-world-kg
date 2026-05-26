@@ -7,6 +7,7 @@ from game_world_kg.evaluation import (
     evaluate_npc_memory,
     evaluate_quests,
     evaluate_replay,
+    evaluate_three_store_demo_village,
     run_evaluation,
 )
 
@@ -69,10 +70,30 @@ def test_evaluate_quests_reports_dependency_traceability_and_completion() -> Non
     assert result["quest_failure_valid_rate"] == 1.0
 
 
+def test_evaluate_three_store_demo_village_reports_consistency_and_resolution() -> None:
+    result = evaluate_three_store_demo_village()
+
+    assert result["projector_rebuild_consistency"] == 1.0
+    assert result["kuzu_graph_query_correct"] == 1.0
+    assert result["chroma_memory_query_correct"] == 1.0
+    assert result["chroma_scope_leak_rate"] == 0.0
+    assert result["demo_village_movement_coverage"] >= 1.0
+    assert result["tension_resolution_rate"] == 1.0
+
+
 def test_run_evaluation_returns_report_summary() -> None:
     report = run_evaluation(event_count=50)
 
-    assert set(report) == {"poc1_extraction", "llm_extraction", "poc2_replay", "poc3_affordance", "poc4_npc_memory", "poc5_quests", "summary"}
+    assert set(report) == {
+        "poc1_extraction",
+        "llm_extraction",
+        "poc2_replay",
+        "poc3_affordance",
+        "poc4_npc_memory",
+        "poc5_quests",
+        "three_store_demo_village",
+        "summary",
+    }
     assert report["summary"]["schema_pass_rate"] == 1.0
     assert report["summary"]["evidence_coverage_rate"] == 1.0
     assert report["summary"]["canonical_error_rate"] == 0.0
@@ -86,3 +107,9 @@ def test_run_evaluation_returns_report_summary() -> None:
     assert report["summary"]["quest_dependency_valid_rate"] == 1.0
     assert report["summary"]["quest_traceability_rate"] == 1.0
     assert report["summary"]["quest_completable_rate"] == 1.0
+    assert report["summary"]["projector_rebuild_consistency"] == 1.0
+    assert report["summary"]["kuzu_graph_query_correct"] == 1.0
+    assert report["summary"]["chroma_memory_query_correct"] == 1.0
+    assert report["summary"]["chroma_scope_leak_rate"] == 0.0
+    assert report["summary"]["demo_village_movement_coverage"] >= 1.0
+    assert report["summary"]["tension_resolution_rate"] == 1.0

@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from .config import StorageConfig
 from .db import connect, init_db, transaction
 from .events import EventLog
 from .extraction import ExtractionPipeline
 from .projector import StateProjector, delta
 from .quest import QuestValidator
 from .seed import DEMO_WORLD_ID, seed_demo_world
+from .seed_village import DEMO_VILLAGE_WORLD_ID, seed_village_world
 from .service import GameWorldService
 
 
@@ -54,6 +57,7 @@ def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
     poc3 = evaluate_affordances()
     poc4 = evaluate_npc_memory()
     poc5 = evaluate_quests()
+    three_store = evaluate_three_store_demo_village()
     return {
         "poc1_extraction": poc1,
         "llm_extraction": llm_extraction,
@@ -61,6 +65,7 @@ def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
         "poc3_affordance": poc3,
         "poc4_npc_memory": poc4,
         "poc5_quests": poc5,
+        "three_store_demo_village": three_store,
         "summary": {
             "schema_pass_rate": poc1["schema_pass_rate"],
             "evidence_coverage_rate": poc1["evidence_coverage_rate"],
@@ -79,7 +84,88 @@ def run_evaluation(event_count: int = 1000) -> dict[str, Any]:
             "quest_dependency_valid_rate": poc5["quest_dependency_valid_rate"],
             "quest_traceability_rate": poc5["quest_traceability_rate"],
             "quest_completable_rate": poc5["quest_completable_rate"],
+            "projector_rebuild_consistency": three_store["projector_rebuild_consistency"],
+            "kuzu_graph_query_correct": three_store["kuzu_graph_query_correct"],
+            "chroma_memory_query_correct": three_store["chroma_memory_query_correct"],
+            "chroma_scope_leak_rate": three_store["chroma_scope_leak_rate"],
+            "demo_village_movement_coverage": three_store["demo_village_movement_coverage"],
+            "tension_resolution_rate": three_store["tension_resolution_rate"],
         },
+    }
+
+
+def evaluate_three_store_demo_village() -> dict[str, Any]:
+    service = _new_village_service()
+    world_id = DEMO_VILLAGE_WORLD_ID
+    initial_tension_ids = {item["tension_id"] for item in service.tensions(world_id)}
+
+    initial_targets = _movement_targets(service.affordances(world_id))
+    movement_checks = [
+        {"village_square", "guard_room"} <= initial_targets,
+        "inner_city" not in initial_targets,
+    ]
+    visited = {"village_gate"}
+    for command in ["去村广场", "去酒馆", "回到广场", "去市集", "回到广场", "去井边", "回到广场", "去仓库"]:
+        result = service.turn(world_id, command)
+        movement_checks.append(result["accepted"] is True)
+        visited.add(service.state(world_id)["player"]["location"])
+    movement_checks.append(len(visited) >= 6)
+
+    service.turn(world_id, "检查仓库门锁")
+    service.turn(world_id, "回到广场")
+    service.turn(world_id, "请求仓库权限")
+    service.turn(world_id, "去市集")
+    service.turn(world_id, "和商人伯林协商粮食交易")
+    service.turn(world_id, "回到广场")
+    service.turn(world_id, "去酒馆")
+    service.turn(world_id, "询问米拉关于银钥匙传闻")
+    service.turn(world_id, "找可疑旅人澄清银钥匙谣言")
+    service.turn(world_id, "回到广场")
+    service.turn(world_id, "去村口")
+    service.turn(world_id, "我向守卫出示通行令")
+    service.turn(world_id, "请守卫放行")
+
+    remaining_tension_ids = {item["tension_id"] for item in service.tensions(world_id)}
+    resolved_targets = {
+        "tension_locked_iron_gate",
+        "tension_key_theft_rumor",
+        "tension_warehouse_locked",
+        "tension_grain_trade_blocked",
+    }
+    resolved_checks = [item in initial_tension_ids and item not in remaining_tension_ids for item in resolved_targets]
+
+    rebuild = service.rebuild_projectors(world_id)
+    sqlite_graph = service.graph(world_id)
+    kuzu_graph = service.kuzu_graph(world_id)
+    active_sqlite_edges = [edge for edge in sqlite_graph["edges"] if edge["valid_to_turn"] is None]
+    consistency_checks = [
+        len(kuzu_graph["nodes"]) == len(sqlite_graph["nodes"]),
+        len(kuzu_graph["edges"]) == len(active_sqlite_edges),
+        service.state(world_id)["silver_key"]["holder"] == "guard_alos",
+    ]
+    kuzu_neighbors = service.kuzu_neighbors(world_id, "village_square", "CONNECTS")
+    kuzu_checks = [
+        any(edge["dst_id"] == "tavern" or edge["src_id"] == "tavern" for edge in kuzu_neighbors),
+        any(edge["dst_id"] == "warehouse" or edge["src_id"] == "warehouse" for edge in kuzu_neighbors),
+    ]
+    player_hits = service.search_memories(world_id, "player", "可疑旅人 银钥匙 误会", 5)
+    guard_hits = service.search_memories(world_id, "guard_alos", "可疑旅人 银钥匙 误会", 5)
+    chroma_checks = [
+        any("可疑旅人" in hit["text"] for hit in player_hits),
+        not any("可疑旅人" in hit["text"] or "误会" in hit["text"] for hit in guard_hits),
+    ]
+
+    return {
+        "world_id": world_id,
+        "projectors": rebuild["projectors"],
+        "projector_rebuild_consistency": _rate(consistency_checks),
+        "kuzu_graph_query_correct": _rate(kuzu_checks),
+        "chroma_memory_query_correct": 1.0 if chroma_checks[0] else 0.0,
+        "chroma_scope_leak_rate": 0.0 if chroma_checks[1] else 1.0,
+        "demo_village_movement_coverage": len(visited) / 6,
+        "tension_resolution_rate": _rate(resolved_checks),
+        "initial_tensions": sorted(initial_tension_ids),
+        "remaining_tensions": sorted(remaining_tension_ids),
     }
 
 
@@ -272,6 +358,25 @@ def _new_service_with_llm() -> tuple[GameWorldService, CountingLLM]:
     return GameWorldService(conn, llm), llm
 
 
+def _new_village_service() -> GameWorldService:
+    root = Path(".data/evaluation")
+    conn = connect(":memory:")
+    init_db(conn)
+    with transaction(conn):
+        seed_village_world(conn)
+    service = GameWorldService(
+        conn,
+        storage=StorageConfig(
+            sqlite_path=root / "game_world_kg.sqlite3",
+            kuzu_path=root / "kuzu",
+            chroma_path=root / "chroma",
+        ),
+    )
+    service.chroma_store._client = None
+    service.chroma_store._native_collections.clear()
+    return service
+
+
 def _append_reputation_events(service: GameWorldService, event_count: int) -> None:
     with service._lock:
         log = EventLog(service.conn)
@@ -302,6 +407,10 @@ def _append_reputation_events(service: GameWorldService, event_count: int) -> No
 
 def _affordance_ids(service: GameWorldService) -> set[str]:
     return {item["action_id"] for item in service.affordances(DEMO_WORLD_ID)}
+
+
+def _movement_targets(affordances: list[dict[str, Any]]) -> set[str]:
+    return {item["target_id"] for item in affordances if item["action_id"] == "move_to_location"}
 
 
 def _rate(checks: list[bool]) -> float:

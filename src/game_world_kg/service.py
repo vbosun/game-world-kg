@@ -172,6 +172,7 @@ class GameWorldService:
                     turn["turn_index"],
                     player_input,
                     action_id=candidate.action_id if candidate else None,
+                    target_id=candidate.target_id if candidate else None,
                     extractor="llm_action_parser_v1" if candidate else "rule_parser_v1",
                     confidence=candidate.confidence if candidate else 0.9,
                 )

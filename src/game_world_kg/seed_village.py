@@ -15,6 +15,7 @@ DEMO_VILLAGE_WORLD_ID = "demo_village"
 def seed_village_world(conn: sqlite3.Connection, world_id: str = DEMO_VILLAGE_WORLD_ID) -> str:
     row = conn.execute("SELECT id FROM worlds WHERE id = ?", (world_id,)).fetchone()
     if row:
+        seed_village_location_connections(conn, world_id)
         seed_village_action_templates(conn, world_id)
         return world_id
 
@@ -67,6 +68,19 @@ def seed_village_world(conn: sqlite3.Connection, world_id: str = DEMO_VILLAGE_WO
         )
         projector.apply_event(event)
 
+    for from_location, to_location in _location_connections():
+        event = log.append(
+            world_id,
+            turn_id,
+            0,
+            "CONNECT_LOCATION",
+            "system",
+            {"from": from_location, "to": to_location},
+            participants=[from_location, to_location],
+            evidence_refs=[_seed_evidence()],
+        )
+        projector.apply_event(event)
+
     for item_id, holder_id in _initial_holders():
         event = log.append(
             world_id,
@@ -102,6 +116,42 @@ def seed_village_action_templates(conn: sqlite3.Connection, world_id: str = DEMO
     store = ActionTemplateStore(conn)
     for template in _action_templates():
         store.upsert(world_id, template)
+
+
+def seed_village_location_connections(conn: sqlite3.Connection, world_id: str = DEMO_VILLAGE_WORLD_ID) -> None:
+    missing = [
+        (from_location, to_location)
+        for from_location, to_location in _location_connections()
+        if conn.execute(
+            """
+            SELECT 1 FROM edges
+            WHERE world_id = ?
+              AND rel_type = 'CONNECTS'
+              AND valid_to_turn IS NULL
+              AND ((src_id = ? AND dst_id = ?) OR (src_id = ? AND dst_id = ?))
+            """,
+            (world_id, from_location, to_location, to_location, from_location),
+        ).fetchone()
+        is None
+    ]
+    if not missing:
+        return
+    log = EventLog(conn)
+    projector = StateProjector(conn)
+    turn_id = log.create_turn(world_id, "seed_village_location_connections", "补齐村庄地点连接。")
+    turn = conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+    for from_location, to_location in missing:
+        event = log.append(
+            world_id,
+            turn_id,
+            turn["turn_index"],
+            "CONNECT_LOCATION",
+            "system",
+            {"from": from_location, "to": to_location},
+            participants=[from_location, to_location],
+            evidence_refs=[_seed_evidence()],
+        )
+        projector.apply_event(event)
 
 
 def _entity_specs() -> list[dict[str, Any]]:
@@ -173,7 +223,19 @@ def _initial_locations() -> list[tuple[str, str]]:
         ("merchant_borin", "market_stall"),
         ("village_chief", "village_square"),
         ("suspicious_traveler", "tavern"),
-        ("warehouse_keeper", "warehouse"),
+        ("warehouse_keeper", "village_square"),
+    ]
+
+
+def _location_connections() -> list[tuple[str, str]]:
+    return [
+        ("village_gate", "village_square"),
+        ("village_square", "tavern"),
+        ("village_square", "market_stall"),
+        ("village_square", "well"),
+        ("village_square", "warehouse"),
+        ("village_gate", "guard_room"),
+        ("village_gate", "inner_city"),
     ]
 
 
@@ -221,6 +283,22 @@ def _initial_memories() -> list[dict[str, Any]]:
 
 def _action_templates() -> list[ActionTemplate]:
     return [
+        ActionTemplate(
+            action_id="move_to_location",
+            label="前往地点",
+            target_id=None,
+            risk="low",
+            reason="目标地点与当前位置相连。",
+            preconditions=[
+                {
+                    "type": "connected_location",
+                    "actor": "$actor",
+                    "target": "$target",
+                    "reason": "目标地点无法从当前位置直接到达，或路径被封锁。",
+                }
+            ],
+            effects=[{"type": "move_entity", "entity": "$actor", "to": "$target", "actor": "$actor"}],
+        ),
         _talk("talk_to_guard", "和守卫交谈", "guard_alos"),
         _talk("talk_to_mira", "和米拉交谈", "tavern_keeper_mira"),
         _talk("talk_to_borin", "和商人伯林交谈", "merchant_borin"),
@@ -267,13 +345,32 @@ def _action_templates() -> list[ActionTemplate]:
             effects=[{"type": "add_memory", "owner": "$actor", "memory_text": "米拉说，银钥匙传闻最早来自一个可疑旅人。", "truth_scope": "player", "salience": 0.7, "actor": "system"}],
         ),
         ActionTemplate(
+            action_id="clarify_rumor",
+            label="澄清银钥匙传闻",
+            target_id="suspicious_traveler",
+            risk="low",
+            reason="可疑旅人承认传闻源于误会，银钥匙归属不变。",
+            preconditions=[{"type": "same_location", "a": "$actor", "b": "suspicious_traveler", "reason": "可疑旅人不在当前位置。"}],
+            effects=[
+                {"type": "set_state", "entity": "silver_key", "attr": "theft_suspect.player", "value": False, "scope": "rumor", "actor": "system"},
+                {"type": "set_state", "entity": "silver_key", "attr": "rumor_resolved", "value": True, "scope": "rumor", "actor": "system"},
+                {"type": "add_memory", "owner": "$actor", "memory_text": "可疑旅人承认银钥匙传闻只是误会，银钥匙仍由守卫保管。", "truth_scope": "player", "salience": 0.75, "actor": "system"},
+            ],
+        ),
+        ActionTemplate(
             action_id="inspect_warehouse",
             label="检查仓库门锁",
             target_id="warehouse",
             risk="low",
             reason="仓库仍上锁，可以检查门锁和封条。",
-            preconditions=[{"type": "state_equals", "entity": "warehouse", "attr": "locked", "value": True, "reason": "仓库没有上锁。"}],
-            effects=[{"type": "add_memory", "owner": "$actor", "memory_text": "仓库封条完好，但账本被放在门内侧的桌上。", "truth_scope": "player", "salience": 0.65, "actor": "system"}],
+            preconditions=[
+                {"type": "state_equals", "entity": "$actor", "attr": "location", "value": "warehouse", "reason": "玩家不在仓库门口。"},
+                {"type": "state_equals", "entity": "warehouse", "attr": "locked", "value": True, "reason": "仓库没有上锁。"},
+            ],
+            effects=[
+                {"type": "set_state", "entity": "$actor", "attr": "warehouse_clue", "value": "seal_intact_ledger_inside", "scope": "player", "actor": "system"},
+                {"type": "add_memory", "owner": "$actor", "memory_text": "仓库封条完好，但账本被放在门内侧的桌上。", "truth_scope": "player", "salience": 0.65, "actor": "system"},
+            ],
         ),
         ActionTemplate(
             action_id="request_warehouse_access",
@@ -281,17 +378,34 @@ def _action_templates() -> list[ActionTemplate]:
             target_id="warehouse_keeper",
             risk="low",
             reason="仓库管理员掌握仓库钥匙。",
-            preconditions=[{"type": "same_location", "a": "$actor", "b": "warehouse_keeper", "reason": "仓库管理员不在当前位置。"}],
-            effects=[{"type": "add_memory", "owner": "warehouse_keeper", "memory_text": "玩家请求进入仓库调查粮食问题。", "truth_scope": "npc", "salience": 0.6, "actor": "system"}],
+            preconditions=[
+                {"type": "same_location", "a": "$actor", "b": "warehouse_keeper", "reason": "仓库管理员不在当前位置。"},
+                {"type": "state_equals", "entity": "$actor", "attr": "warehouse_clue", "value": "seal_intact_ledger_inside", "scope": "player", "reason": "玩家还没有检查仓库线索。"},
+            ],
+            effects=[
+                {"type": "set_state", "entity": "warehouse", "attr": "locked", "value": False, "actor": "warehouse_keeper"},
+                {"type": "set_state", "entity": "$actor", "attr": "warehouse_access_granted", "value": True, "scope": "player", "actor": "system"},
+                {"type": "add_memory", "owner": "warehouse_keeper", "memory_text": "玩家请求进入仓库调查粮食问题，管理员同意开门。", "truth_scope": "npc", "salience": 0.6, "actor": "system"},
+            ],
         ),
         ActionTemplate(
             action_id="trade_grain",
             label="协商粮食交易",
             target_id="merchant_borin",
             risk="medium",
-            reason="商人伯林有足够金币，但村长尚未完全信任他。",
-            preconditions=[{"type": "resource_at_least", "entity": "merchant_borin", "attr": "gold", "value": 5, "reason": "商人伯林资金不足。"}],
-            effects=[{"type": "add_memory", "owner": "merchant_borin", "memory_text": "玩家愿意协助调查仓库粮食交易。", "truth_scope": "npc", "salience": 0.55, "actor": "system"}],
+            reason="商人伯林有足够金币，仓库已开放，可以完成粮食交易。",
+            preconditions=[
+                {"type": "same_location", "a": "$actor", "b": "merchant_borin", "reason": "商人伯林不在当前位置。"},
+                {"type": "state_equals", "entity": "warehouse", "attr": "locked", "value": False, "reason": "仓库仍上锁，无法核验粮食。"},
+                {"type": "resource_at_least", "entity": "merchant_borin", "attr": "gold", "value": 5, "reason": "商人伯林资金不足。"},
+            ],
+            effects=[
+                {"type": "delta_resource", "entity": "warehouse", "attr": "grain_stock", "delta": -4, "actor": "system"},
+                {"type": "delta_resource", "entity": "merchant_borin", "attr": "gold", "delta": -5, "actor": "merchant_borin"},
+                {"type": "change_relation", "src": "village_chief", "rel": "TRUSTS", "dst": "merchant_borin", "state_attr": "trust.merchant_borin", "delta": 1, "actor": "system"},
+                {"type": "set_state", "entity": "grain_bag", "attr": "trade_completed", "value": True, "actor": "system"},
+                {"type": "add_memory", "owner": "merchant_borin", "memory_text": "玩家帮助核验仓库账本并完成一笔粮食交易。", "truth_scope": "npc", "salience": 0.7, "actor": "system"},
+            ],
         ),
     ]
 

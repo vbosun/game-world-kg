@@ -93,6 +93,7 @@ class ActionTemplateStore:
 
 class PredicateEvaluator:
     def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
         self.state = StateProjector(conn)
 
     def evaluate(self, world_id: str, predicate: dict[str, Any], bindings: dict[str, str]) -> bool:
@@ -111,6 +112,15 @@ class PredicateEvaluator:
         if kind == "resource_at_least":
             value = self._state(world_id, predicate["entity"], predicate["attr"], bindings, predicate.get("scope", "canonical")) or 0
             return value >= predicate["value"]
+        if kind == "connected_location":
+            actor = self._bind(predicate["actor"], bindings)
+            target = self._bind(predicate["target"], bindings)
+            if not target:
+                return False
+            current = self.state.get_state(world_id, actor, "location")
+            if target == "inner_city" and self.state.get_state(world_id, "iron_gate", "open") is not True:
+                return False
+            return self._locations_connected(world_id, current, target)
         if kind == "scope_allowed":
             return predicate.get("scope", "canonical") in {"canonical", "player", "npc", "faction", "rumor", "candidate", "rejected"}
         raise ValueError(f"unknown predicate type: {kind}")
@@ -124,8 +134,23 @@ class PredicateEvaluator:
     @staticmethod
     def _bind(value: str, bindings: dict[str, str]) -> str:
         if value.startswith("$"):
-            return bindings[value[1:]]
+            return bindings.get(value[1:], "")
         return value
+
+    def _locations_connected(self, world_id: str, current: str | None, target: str) -> bool:
+        if current is None:
+            return False
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM edges
+            WHERE world_id = ?
+              AND rel_type = 'CONNECTS'
+              AND valid_to_turn IS NULL
+              AND ((src_id = ? AND dst_id = ?) OR (src_id = ? AND dst_id = ?))
+            """,
+            (world_id, current, target, target, current),
+        ).fetchone()
+        return row is not None
 
 
 class EffectExecutor:
@@ -223,7 +248,7 @@ class EffectExecutor:
     @staticmethod
     def _bind(value: str, bindings: dict[str, str]) -> str:
         if value.startswith("$"):
-            return bindings[value[1:]]
+            return bindings.get(value[1:], "")
         return value
 
 
@@ -242,11 +267,12 @@ class ActionResolver:
         action_id: str,
         evidence: list[dict[str, Any]],
         actor_id: str = "player",
+        target_id: str | None = None,
     ) -> ActionResolution | None:
         template = self.templates.get(world_id, action_id)
         if template is None:
             return None
-        bindings = {"actor": actor_id}
+        bindings = {"actor": actor_id, "target": target_id or template.target_id or ""}
         for predicate in template.preconditions:
             if not self.predicates.evaluate(world_id, predicate, bindings):
                 reason = self.predicates.failure_reason(predicate)
@@ -264,12 +290,54 @@ class ActionTemplateEngine:
         bindings = {"actor": actor_id}
         affordances: list[dict[str, Any]] = []
         for template in self.templates.list_enabled(world_id):
+            if template.action_id == "move_to_location":
+                affordances.extend(self._movement_affordances(world_id, actor_id, template))
+                continue
             if all(self.predicates.evaluate(world_id, item, bindings) for item in template.preconditions):
                 affordances.append(
                     {
                         "action_id": template.action_id,
                         "label": template.label,
                         "target_id": template.target_id or "",
+                        "risk": template.risk,
+                        "reason": template.reason,
+                    }
+                )
+        return affordances
+
+    def _movement_affordances(self, world_id: str, actor_id: str, template: ActionTemplate) -> list[dict[str, Any]]:
+        current = self.predicates.state.get_state(world_id, actor_id, "location")
+        if current is None:
+            return []
+        rows = self.predicates.conn.execute(
+            """
+            SELECT e.src_id, e.dst_id, n.name
+            FROM edges e
+            JOIN nodes n
+              ON n.world_id = e.world_id
+             AND n.id = CASE WHEN e.src_id = ? THEN e.dst_id ELSE e.src_id END
+            WHERE e.world_id = ?
+              AND e.rel_type = 'CONNECTS'
+              AND e.valid_to_turn IS NULL
+              AND (e.src_id = ? OR e.dst_id = ?)
+            ORDER BY n.name
+            """,
+            (current, world_id, current, current),
+        ).fetchall()
+        affordances: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            target_id = row["dst_id"] if row["src_id"] == current else row["src_id"]
+            if target_id in seen:
+                continue
+            seen.add(target_id)
+            bindings = {"actor": actor_id, "target": target_id}
+            if all(self.predicates.evaluate(world_id, item, bindings) for item in template.preconditions):
+                affordances.append(
+                    {
+                        "action_id": template.action_id,
+                        "label": f"前往{row['name']}",
+                        "target_id": target_id,
                         "risk": template.risk,
                         "reason": template.reason,
                     }

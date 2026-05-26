@@ -31,14 +31,16 @@ class RuleEngine:
         turn_index: int,
         player_input: str,
         action_id: str | None = None,
+        target_id: str | None = None,
         extractor: str = "rule_parser_v1",
         confidence: float = 0.9,
         evidence_source_id: str | None = None,
         evidence_span: list[int] | None = None,
     ) -> RuleResult:
-        action_id = action_id or self.parse_action(player_input)
+        if action_id is None:
+            action_id, target_id = self.parse_action_candidate(player_input)
         evidence = [{"source_id": evidence_source_id or turn_id, "span": evidence_span or [0, len(player_input)], "extractor": extractor, "confidence": confidence}]
-        templated = ActionResolver(self.conn).resolve(world_id, turn_id, turn_index, action_id, evidence)
+        templated = ActionResolver(self.conn).resolve(world_id, turn_id, turn_index, action_id, evidence, target_id=target_id)
         if templated is not None:
             return RuleResult(
                 templated.action_id,
@@ -71,24 +73,69 @@ class RuleEngine:
 
     @staticmethod
     def parse_action(text: str) -> str:
+        return RuleEngine.parse_action_candidate(text)[0]
+
+    @staticmethod
+    def parse_action_candidate(text: str) -> tuple[str, str | None]:
+        target_id = RuleEngine.parse_location_target(text)
+        if target_id is not None and any(word in text for word in ["去", "前往", "走到", "到", "进入", "进", "移动"]):
+            if target_id != "inner_city" or "进入内城" not in text:
+                return "move_to_location", target_id
         if "有人说" in text or "谣言" in text or "传闻" in text:
             if "偷" in text and "钥匙" in text:
-                return "rumor_player_stole_key"
+                return "rumor_player_stole_key", None
+        if any(word in text for word in ["澄清", "解释", "可疑旅人"]) and any(word in text for word in ["谣言", "传闻", "银钥匙", "钥匙"]):
+            return "clarify_rumor", None
+        if any(word in text for word in ["询问", "打听", "问"]) and any(word in text for word in ["谣言", "传闻", "米拉"]):
+            return "ask_about_rumor", None
+        if any(word in text for word in ["检查", "调查", "查看"]) and "仓库" in text:
+            return "inspect_warehouse", None
+        if any(word in text for word in ["请求", "申请", "权限", "钥匙"]) and "仓库" in text:
+            return "request_warehouse_access", None
+        if any(word in text for word in ["交易", "协商", "买粮", "粮食"]) and any(word in text for word in ["伯林", "商人", "粮"]):
+            return "trade_grain", None
         if "怀疑" in text and "钥匙" in text:
-            return "guard_suspects_player"
+            return "guard_suspects_player", None
         if "通行令" in text and any(word in text for word in ["出示", "递", "交给", "给守卫"]):
-            return "show_pass_token"
+            return "show_pass_token", None
         if "钥匙" in text and any(word in text for word in ["开门", "打开", "开铁门"]):
-            return "unlock_gate_with_key"
+            return "unlock_gate_with_key", None
         if "放行" in text or "进去" in text or "进入内城" in text:
             if "进入内城" in text:
-                return "enter_inner_city"
-            return "ask_guard_open_gate"
+                return "enter_inner_city", None
+            return "ask_guard_open_gate", None
         if "贿赂" in text or "钱袋" in text:
-            return "bribe_guard"
+            return "bribe_guard", None
         if "偷" in text and "钥匙" in text:
-            return "steal_silver_key"
-        return "talk_to_guard"
+            return "steal_silver_key", None
+        if "米拉" in text:
+            return "talk_to_mira", None
+        if "伯林" in text or "商人" in text:
+            return "talk_to_borin", None
+        if "村长" in text:
+            return "talk_to_chief", None
+        if "仓库管理员" in text:
+            return "talk_to_warehouse_keeper", None
+        if "守卫" in text or "阿洛斯" in text:
+            return "talk_to_guard", None
+        return "talk_to_guard", None
+
+    @staticmethod
+    def parse_location_target(text: str) -> str | None:
+        aliases = {
+            "village_gate": ["村口", "城门", "门口"],
+            "village_square": ["村广场", "广场"],
+            "tavern": ["酒馆", "旅店"],
+            "market_stall": ["市集", "摊位", "市场"],
+            "well": ["井边", "水井", "井"],
+            "warehouse": ["仓库"],
+            "guard_room": ["守卫室", "岗亭"],
+            "inner_city": ["内城"],
+        }
+        for location_id, words in aliases.items():
+            if any(word in text for word in words):
+                return location_id
+        return None
 
     def _show_pass_token(self, world_id: str, turn_id: str, turn_index: int, evidence: list[dict[str, Any]]) -> RuleResult:
         if not self._same_location(world_id, "player", "guard_alos"):

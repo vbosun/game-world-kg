@@ -138,6 +138,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def post_projectors_rebuild(world_id: str) -> dict[str, Any]:
         return _handle(lambda: service.rebuild_projectors(world_id))
 
+    @app.get("/worlds/{world_id}/projectors/status")
+    def get_projectors_status(world_id: str) -> list[dict[str, Any]]:
+        return _handle(lambda: service.projection_status(world_id))
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "demo_world_id": DEMO_WORLD_ID, "demo_village_world_id": DEMO_VILLAGE_WORLD_ID}

@@ -221,6 +221,14 @@
         <button id="npcBtn" type="button">询问</button>
       </div>
       <div class="card stack">
+        <h2>Explain</h2>
+        <label for="explainKind">类型</label>
+        <input id="explainKind" value="state" placeholder="state / event / quest / memory">
+        <label for="explainTarget">目标</label>
+        <input id="explainTarget" value="player.location" placeholder="player.location / event_id / quest_id / memory_id">
+        <button id="explainBtn" type="button">解释</button>
+      </div>
+      <div class="card stack">
         <h2>Replay</h2>
         <label for="replayTurn">回合编号，留空为最新</label>
         <input id="replayTurn" placeholder="1">
@@ -239,7 +247,7 @@
     </section>
   </main>
   <script>
-    const views = ["overview", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "quests", "evaluation", "raw"];
+    const views = ["overview", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "tensions", "quests", "explain", "evaluation", "raw"];
     const labels = {
       overview: "概览",
       state: "State",
@@ -249,7 +257,9 @@
       chroma: "Chroma",
       memories: "Memories",
       affordances: "Affordances",
+      tensions: "Tensions",
       quests: "Quests",
+      explain: "Explain",
       evaluation: "Evaluation",
       raw: "Raw"
     };
@@ -278,19 +288,21 @@
     async function refresh() {
       const id = worldId();
       setStatus("刷新中...");
-      const [state, events, graph, kuzuGraph, chromaEvidence, chromaMemories, memories, affordances, quests, evaluation] = await Promise.all([
+      const [state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, affordances, tensions, quests, evaluation] = await Promise.all([
         api(`/worlds/${id}/state`),
         api(`/worlds/${id}/events`),
         api(`/worlds/${id}/graph`),
         api(`/worlds/${id}/kuzu/graph`),
+        api(`/worlds/${id}/projectors/status`),
         api(`/worlds/${id}/chroma/search/evidence?query=通行令&limit=5`),
         api(`/worlds/${id}/chroma/search/memories?owner_id=guard_alos&query=通行令&limit=5`),
         api(`/worlds/${id}/memories`),
         api(`/worlds/${id}/affordances`),
+        api(`/worlds/${id}/tensions`),
         api(`/worlds/${id}/quests`),
         api(`/evaluation`)
       ]);
-      Object.assign(data, { state, events, graph, kuzuGraph, chromaEvidence, chromaMemories, memories, affordances, quests, evaluation });
+      Object.assign(data, { state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, affordances, tensions, quests, evaluation });
       setStatus(`已刷新 ${new Date().toLocaleTimeString()}`, "ok");
       render();
     }
@@ -347,6 +359,29 @@
       render();
     }
 
+    async function explain() {
+      const id = worldId();
+      const kind = document.getElementById("explainKind").value.trim();
+      const target = document.getElementById("explainTarget").value.trim();
+      setStatus("解释中...");
+      if (kind === "state") {
+        const [entity, ...attrParts] = target.split(".");
+        const attr = attrParts.join(".");
+        data.lastExplain = await api(`/worlds/${id}/explain/state/${entity}/${attr || "location"}`);
+      } else if (kind === "event") {
+        data.lastExplain = await api(`/worlds/${id}/explain/event/${target}`);
+      } else if (kind === "quest") {
+        data.lastExplain = await api(`/worlds/${id}/explain/quest/${target}`);
+      } else if (kind === "memory") {
+        data.lastExplain = await api(`/worlds/${id}/explain/memory/${target}`);
+      } else {
+        throw new Error("explain kind must be state, event, quest, or memory");
+      }
+      setStatus("解释已加载", "ok");
+      currentView = "explain";
+      render();
+    }
+
     function renderTabs() {
       const tabs = document.getElementById("tabs");
       tabs.innerHTML = "";
@@ -374,7 +409,9 @@
       if (currentView === "chroma") content.innerHTML = chromaView();
       if (currentView === "memories") content.innerHTML = memoriesView();
       if (currentView === "affordances") content.innerHTML = affordancesView();
+      if (currentView === "tensions") content.innerHTML = tensionsView();
       if (currentView === "quests") content.innerHTML = questsView();
+      if (currentView === "explain") content.innerHTML = explainView();
       if (currentView === "evaluation") content.innerHTML = evaluationView();
       if (currentView === "raw") content.innerHTML = `<pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
     }
@@ -390,6 +427,7 @@
           ${metric("守卫信任", state.guard_alos?.["trust.player"] ?? "-")}
           ${metric("事件数", (data.events || []).length)}
           ${metric("记忆数", (data.memories || []).length)}
+          ${metric("矛盾数", (data.tensions || []).length)}
           ${metric("任务数", (data.quests || []).length)}
         </div>
         <div style="height:12px"></div>
@@ -424,7 +462,7 @@
 
     function kuzuView() {
       const graph = data.kuzuGraph || {};
-      const status = data.lastProjectors ? card("Projection Status", `<pre>${escapeHtml(JSON.stringify(data.lastProjectors, null, 2))}</pre>`) : "";
+      const status = card("Projection Status", `<pre>${escapeHtml(JSON.stringify(data.projectionStatus || data.lastProjectors || [], null, 2))}</pre>`);
       const nodes = card(`Nodes (${graph.backend || "-"})`, table(["Id", "Type", "Name", "Scope"], (graph.nodes || []).map(n => [n.id, n.entity_type, n.name || "-", n.scope])));
       const edges = card("Edges", table(["Src", "Rel", "Dst", "Props"], (graph.edges || []).map(e => [e.src_id, e.rel_type, e.dst_id, JSON.stringify(e.properties)])));
       return `<div class="grid">${status}${nodes}${edges}</div>`;
@@ -453,13 +491,27 @@
       `)).join("")}</div>`;
     }
 
+    function tensionsView() {
+      return `<div class="grid">${(data.tensions || []).map(t => card(t.type, `
+        <div class="pill">${escapeHtml(t.tension_id)}</div>
+        <p>${escapeHtml(t.reason)}</p>
+        <p class="muted">Actions: ${escapeHtml((t.suggested_actions || []).join(", "))}</p>
+        <pre>${escapeHtml(JSON.stringify(t.evidence, null, 2))}</pre>
+      `)).join("")}</div>`;
+    }
+
     function questsView() {
       return `<div class="grid">${(data.quests || []).map(q => card(q.title, `
         <div class="pill">${escapeHtml(q.quest_id)}</div>
+        ${q.tension_id ? `<div class="pill">${escapeHtml(q.tension_id)}</div>` : ""}
         <p>${escapeHtml(q.reason)}</p>
         <p class="muted">Depends: ${escapeHtml(q.depends_on.join(", "))}</p>
         <pre>${escapeHtml(JSON.stringify(q.evidence, null, 2))}</pre>
       `)).join("")}</div>`;
+    }
+
+    function explainView() {
+      return `<pre>${escapeHtml(JSON.stringify(data.lastExplain || { message: "No explanation loaded" }, null, 2))}</pre>`;
     }
 
     function evaluationView() {
@@ -498,6 +550,7 @@
     document.getElementById("turnBtn").onclick = () => submitTurn().catch(err => setStatus(err.message, "bad"));
     document.getElementById("npcBtn").onclick = () => askNpc().catch(err => setStatus(err.message, "bad"));
     document.getElementById("replayBtn").onclick = () => replay().catch(err => setStatus(err.message, "bad"));
+    document.getElementById("explainBtn").onclick = () => explain().catch(err => setStatus(err.message, "bad"));
     document.getElementById("projectorRunBtn").onclick = () => runProjectors(false).catch(err => setStatus(err.message, "bad"));
     document.getElementById("projectorRebuildBtn").onclick = () => runProjectors(true).catch(err => setStatus(err.message, "bad"));
     render();

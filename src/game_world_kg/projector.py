@@ -125,6 +125,10 @@ class StateProjector:
         self._close_edges(event.world_id, src, rel, event.turn_index, dst_id=dst)
         self._insert_edge(event, src, rel, dst, {"value": value})
 
+    def _apply_connect_location(self, event: EventRecord) -> None:
+        payload = event.payload
+        self._insert_edge(event, payload["from"], "CONNECTS", payload["to"], payload.get("properties", {}))
+
     def _apply_add_memory(self, event: EventRecord) -> None:
         payload = event.payload
         self.conn.execute(
@@ -321,6 +325,11 @@ class KuzuProjector:
             data = payload["payload"]
             self.store.upsert_relation(
                 _relation_payload(world_id, data["src"], data["rel"], data["dst"], event_id, payload.get("turn_index", 0), {"value": data.get("value")})
+            )
+        elif event_type == "CONNECT_LOCATION":
+            data = payload["payload"]
+            self.store.upsert_relation(
+                _relation_payload(world_id, data["from"], "CONNECTS", data["to"], event_id, payload.get("turn_index", 0), data.get("properties", {}))
             )
 
 
