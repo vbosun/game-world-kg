@@ -49,6 +49,65 @@ class ExplanationService:
             "evidence": from_json(event["evidence_refs_json"], []) if event is not None else [],
         }
 
+    def explain_event(self, world_id: str, event_id: str) -> dict[str, Any]:
+        event = self.conn.execute("SELECT * FROM events WHERE world_id = ? AND id = ?", (world_id, event_id)).fetchone()
+        if event is None:
+            raise KeyError(event_id)
+        return {
+            "world_id": world_id,
+            "event": _event_payload(event),
+            "state_deltas": [
+                {
+                    "entity_id": row["entity_id"],
+                    "attr": row["attr"],
+                    "old_value": from_json(row["old_value_json"]),
+                    "new_value": from_json(row["new_value_json"]),
+                    "delta": from_json(row["delta_json"]),
+                    "scope": row["scope"],
+                }
+                for row in self.conn.execute("SELECT * FROM state_deltas WHERE event_id = ?", (event_id,)).fetchall()
+            ],
+            "evidence": from_json(event["evidence_refs_json"], []),
+        }
+
+    def explain_memory(self, world_id: str, memory_id: str) -> dict[str, Any]:
+        memory = self.conn.execute("SELECT * FROM memories WHERE world_id = ? AND id = ?", (world_id, memory_id)).fetchone()
+        if memory is None:
+            raise KeyError(memory_id)
+        event = None
+        if memory["source_event_id"]:
+            event = self.conn.execute("SELECT * FROM events WHERE id = ?", (memory["source_event_id"],)).fetchone()
+        return {
+            "world_id": world_id,
+            "memory": {
+                "id": memory["id"],
+                "owner_id": memory["owner_id"],
+                "memory_text": memory["memory_text"],
+                "truth_scope": memory["truth_scope"],
+                "salience": memory["salience"],
+                "valence": memory["valence"],
+                "confidence": memory["confidence"],
+                "source_event_id": memory["source_event_id"],
+            },
+            "source_event": _event_payload(event) if event is not None else None,
+            "evidence": from_json(memory["evidence_refs_json"], []),
+        }
+
+    def explain_quest(self, world_id: str, quest: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "world_id": world_id,
+            "quest_id": quest["quest_id"],
+            "title": quest["title"],
+            "reason": quest["reason"],
+            "tension_id": quest.get("tension_id"),
+            "depends_on": quest["depends_on"],
+            "required_state": quest["required_state"],
+            "reward": quest["reward"],
+            "failure_consequence": quest["failure_consequence"],
+            "evidence": quest["evidence"],
+            "traceable": bool(quest["evidence"]),
+        }
+
 
 def _event_payload(event: sqlite3.Row | None) -> dict[str, Any] | None:
     if event is None:

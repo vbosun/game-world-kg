@@ -82,6 +82,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def explain_state(world_id: str, entity_id: str, attr: str, scope: str = "canonical") -> dict[str, Any]:
         return _handle(lambda: service.explain_state(world_id, entity_id, attr, scope))
 
+    @app.get("/worlds/{world_id}/explain/event/{event_id}")
+    def explain_event(world_id: str, event_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.explain_event(world_id, event_id))
+
+    @app.get("/worlds/{world_id}/explain/quest/{quest_id}")
+    def explain_quest(world_id: str, quest_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.explain_quest(world_id, quest_id))
+
+    @app.get("/worlds/{world_id}/explain/memory/{memory_id}")
+    def explain_memory(world_id: str, memory_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.explain_memory(world_id, memory_id))
+
     @app.get("/worlds/{world_id}/memories")
     def get_memories(world_id: str, owner_id: str | None = None) -> list[dict[str, Any]]:
         return _handle(lambda: service.memories(world_id, owner_id))

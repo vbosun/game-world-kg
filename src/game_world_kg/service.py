@@ -254,6 +254,24 @@ class GameWorldService:
             self._require_world(world_id)
             return ExplanationService(self.conn).explain_state(world_id, entity_id, attr, scope)
 
+    def explain_event(self, world_id: str, event_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            return ExplanationService(self.conn).explain_event(world_id, event_id)
+
+    def explain_memory(self, world_id: str, memory_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            return ExplanationService(self.conn).explain_memory(world_id, memory_id)
+
+    def explain_quest(self, world_id: str, quest_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            quest = next((item for item in QuestGenerator(self).generate(world_id) if item["quest_id"] == quest_id), None)
+            if quest is None:
+                raise KeyError(quest_id)
+            return ExplanationService(self.conn).explain_quest(world_id, quest)
+
     def _require_world(self, world_id: str) -> None:
         if self.conn.execute("SELECT 1 FROM worlds WHERE id = ?", (world_id,)).fetchone() is None:
             raise KeyError(world_id)
