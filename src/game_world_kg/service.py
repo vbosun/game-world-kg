@@ -67,7 +67,8 @@ class GameWorldService:
             self._require_world(world_id)
             graph = self.kuzu_store.query_current_graph(world_id)
             if not graph["nodes"] and not graph["edges"]:
-                KuzuProjector(self.conn, self.kuzu_store).rebuild(world_id)
+                with transaction(self.conn):
+                    KuzuProjector(self.conn, self.kuzu_store).rebuild(world_id)
                 graph = self.kuzu_store.query_current_graph(world_id)
             return graph
 
@@ -103,7 +104,8 @@ class GameWorldService:
             self._require_world(world_id)
             hits = self.chroma_store.search_memories(world_id, owner_id, query, limit)
             if not hits:
-                ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
+                with transaction(self.conn):
+                    ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
                 hits = self.chroma_store.search_memories(world_id, owner_id, query, limit)
             return hits
 
@@ -112,15 +114,80 @@ class GameWorldService:
             self._require_world(world_id)
             hits = self.chroma_store.search_evidence(world_id, query, scope, limit)
             if not hits:
-                ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
+                with transaction(self.conn):
+                    ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
                 hits = self.chroma_store.search_evidence(world_id, query, scope, limit)
             return hits
 
     def npc_dialogue(self, world_id: str, npc_id: str, question: str) -> dict[str, Any]:
         with self._lock:
             self._require_world(world_id)
-            ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
-            return MemoryAwareDialogue(self.conn, self.llm_client, self.chroma_store).answer(world_id, npc_id, question)
+            with transaction(self.conn):
+                ChromaProjector(self.conn, self.chroma_store).rebuild(world_id)
+                answer = MemoryAwareDialogue(self.conn, self.llm_client, self.chroma_store).answer(world_id, npc_id, question)
+                log = EventLog(self.conn)
+                turn_id = log.create_turn(world_id, f"npc_dialogue:{npc_id}:{question}", answer["answer"])
+                turn = self.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+                recalled_memory_ids = [memory["id"] for memory in answer["memories"]]
+                dialogue_event = log.append(
+                    world_id,
+                    turn_id,
+                    turn["turn_index"],
+                    "NPC_DIALOGUE",
+                    "player",
+                    {
+                        "npc_id": npc_id,
+                        "question": question,
+                        "answer": answer["answer"],
+                        "recalled_memory_ids": recalled_memory_ids,
+                    },
+                    participants=["player", npc_id],
+                    evidence_refs=[
+                        {
+                            "source_id": turn_id,
+                            "source_type": "npc_dialogue",
+                            "span": [0, len(question)],
+                            "extractor": "dialogue_log_v1",
+                            "confidence": 1.0,
+                        }
+                    ],
+                )
+                memory_event = log.append(
+                    world_id,
+                    turn_id,
+                    turn["turn_index"],
+                    "ADD_MEMORY",
+                    "system",
+                    {
+                        "owner_id": npc_id,
+                        "source_event_id": dialogue_event.id,
+                        "memory_text": _dialogue_memory_text(question, answer["answer"]),
+                        "truth_scope": "npc",
+                        "salience": 0.35,
+                        "valence": 0,
+                        "confidence": 1.0,
+                    },
+                    participants=[npc_id, "player"],
+                    evidence_refs=[
+                        {
+                            "source_id": dialogue_event.id,
+                            "source_type": "npc_dialogue",
+                            "span": [0, len(question)],
+                            "extractor": "dialogue_memory_summary_v1",
+                            "confidence": 1.0,
+                        }
+                    ],
+                    causal_parents=[dialogue_event.id],
+                )
+                StateProjector(self.conn).apply_event(memory_event)
+                created_memories = [
+                    memory
+                    for memory in WorldGraph(self.conn).memories(world_id, npc_id)
+                    if memory["source_event_id"] == dialogue_event.id
+                ]
+                answer["dialogue_event_id"] = dialogue_event.id
+                answer["created_memory_ids"] = [memory["id"] for memory in created_memories]
+                return answer
 
     def neighbors(self, world_id: str, entity_id: str, rel_type: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
@@ -132,7 +199,8 @@ class GameWorldService:
             self._require_world(world_id)
             neighbors = self.kuzu_store.query_neighbors(world_id, entity_id, rel_type)
             if not neighbors:
-                KuzuProjector(self.conn, self.kuzu_store).rebuild(world_id)
+                with transaction(self.conn):
+                    KuzuProjector(self.conn, self.kuzu_store).rebuild(world_id)
                 neighbors = self.kuzu_store.query_neighbors(world_id, entity_id, rel_type)
             return neighbors
 
@@ -276,3 +344,10 @@ class GameWorldService:
     def _require_world(self, world_id: str) -> None:
         if self.conn.execute("SELECT 1 FROM worlds WHERE id = ?", (world_id,)).fetchone() is None:
             raise KeyError(world_id)
+
+
+def _dialogue_memory_text(question: str, answer: str, limit: int = 240) -> str:
+    text = f"玩家问我：{question}；我回答：{answer}"
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1]}…"

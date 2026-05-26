@@ -26,6 +26,16 @@ evaluation summary 纳入三存储一致性与 demo_village 指标
 /debug 可查看 state/events/quests/tensions/explain/projectors
 ```
 
+后续补充：
+
+```text
+NPC 对话记录采用双层结构：
+1. NPC_DIALOGUE 事件保存完整问答、参与者和召回的 memory id，作为审计记录。
+2. ADD_MEMORY 事件从本轮问答生成低 salience 的 NPC 主观记忆，source_event_id 指向 NPC_DIALOGUE。
+
+这样原始对话可回放，长期记忆可检索，同时不会把对话内容直接污染 canonical。
+```
+
 ## Current Status
 
 已完成：

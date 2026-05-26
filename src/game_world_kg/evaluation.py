@@ -309,7 +309,7 @@ def evaluate_npc_memory() -> dict[str, Any]:
     guard_recall = service.recall_memory(DEMO_WORLD_ID, "guard_alos", "玩家偷钥匙")
     pollution_checks.append(service.state(DEMO_WORLD_ID)["silver_key"]["holder"] == "guard_alos")
     pollution_checks.append(bool(village_recall and village_recall[0]["truth_scope"] == "rumor"))
-    pollution_checks.append(guard_recall == [])
+    pollution_checks.append(all(memory["truth_scope"] == "npc" for memory in guard_recall))
 
     return {
         "memory_correct_rate": _rate(memory_checks),
