@@ -17,11 +17,12 @@ scope_key / layer / memory_kind
 
 这说明项目已经从“世界 KG MVP”进入了“NPC 对话记忆治理”阶段。
 
-但按照最新研究报告，NPC 对话不应该直接变成“事实库”或“单条记忆摘要”。正确方向是：
+但按照研究报告，NPC 对话不应该直接变成“事实库”或“单条记忆摘要”。正确方向是：
 
 ```text
 Conversation Log
 → Segment / EDU
+→ Claim Extraction
 → Episodic Memory
 → Semantic Memory Candidate
 → Belief / Rumor / Misremembering
@@ -31,7 +32,7 @@ Conversation Log
 
 核心原则：
 
-> conversation log 必须作为不可变证据保存；LLM 只能生成带证据的候选 memory operation；canonical truth 与 subjective memory 必须隔离。
+> conversation log 必须作为不可变证据保存；LLM 只能生成带证据的候选 memory operation；canonical truth 与 subjective memory 必须隔离；SQLite 是真值源，Kuzu/Chroma 是可重建的物化视图与检索层。
 
 ---
 
@@ -126,7 +127,44 @@ GET /worlds/{world_id}/chroma/search/evidence
 
 ### 2.2 当前主要不足
 
-#### 问题 1：segment 仍是 turn-level 二分，不是真正 EDU/事件命题分段
+#### 问题 1：三存储“接入了”，但 Kuzu/Chroma 还没有充分承担主路径
+
+当前 `KuzuStore.init_schema()` 已定义：
+
+```text
+Entity
+EventNode
+MemoryNode
+RELATES
+EVENT_TARGETS
+EVENT_CAUSED_BY
+EVENT_CHANGED
+REMEMBERS
+MEMORY_ABOUT
+MEMORY_FROM_EVENT
+```
+
+但 `upsert_entity/upsert_relation/upsert_event/upsert_memory/query_neighbors/query_current_graph` 仍主要操作 Python dict/list。
+
+这意味着：
+
+```text
+Kuzu DB 创建了，但没有真正执行 Cypher upsert/query 路径
+```
+
+同时，当前 ChromaStore 已接入 PersistentClient，但 embedding 仍是：
+
+```text
+_mock_embedding(text)
+```
+
+它可以支撑测试，但还不能验证真实语义检索效果。
+
+按照研究报告的三层架构，必须先把 `Kuzu native graph path` 和 `Chroma scoped retrieval` 打牢，再做更复杂的记忆演化。
+
+---
+
+#### 问题 2：segment 仍是 turn-level 二分，不是真正 EDU/事件命题分段
 
 当前 `_segment_dialogue()` 只把对话拆成：
 
@@ -161,7 +199,7 @@ ClaimExtractor
 
 ---
 
-#### 问题 2：MemoryOp 生成仍偏规则样例，不是真正 LLM + 规则混合抽取
+#### 问题 3：MemoryOp 生成仍偏规则样例，不是真正 LLM + 规则混合抽取
 
 当前 `_build_ops()` 主要生成：
 
@@ -199,7 +237,7 @@ review
 
 ---
 
-#### 问题 3：episodic / semantic / belief / rumor 分层字段有了，但演化逻辑不足
+#### 问题 4：episodic / semantic / belief / rumor 分层字段有了，但演化逻辑不足
 
 当前 `memories` 已有：
 
@@ -232,57 +270,7 @@ Dedup/Merge policy
 
 ---
 
-#### 问题 4：KuzuStore 目前有 native schema，但查询主要仍用内存 fallback
-
-`KuzuStore.init_schema()` 已定义：
-
-```text
-Entity
-EventNode
-MemoryNode
-RELATES
-EVENT_TARGETS
-EVENT_CAUSED_BY
-EVENT_CHANGED
-REMEMBERS
-MEMORY_ABOUT
-MEMORY_FROM_EVENT
-```
-
-但 `upsert_entity/upsert_relation/upsert_event/upsert_memory/query_neighbors/query_current_graph` 仍主要操作 Python dict/list。
-
-这意味着：
-
-```text
-Kuzu DB 创建了，但没有真正执行 Cypher upsert/query 路径
-```
-
-下一步要让 native Kuzu 成为主路径，fallback 只用于无依赖测试。
-
----
-
-#### 问题 5：Chroma 已接入，但 embedding 仍是 mock hash
-
-当前 ChromaStore 使用：
-
-```text
-_mock_embedding(text)
-```
-
-可以支撑测试，但不能验证真实语义检索效果。
-
-下一步要支持：
-
-```text
-mock embedding: 单测
-OpenAI-compatible embedding: bge-m3 本地服务
-```
-
-并且要把 query 评估纳入指标。
-
----
-
-#### 问题 6：幻觉防固化目前只有基础规则，还没有完整治理指标
+#### 问题 5：幻觉防固化目前只有基础规则，还没有完整治理指标
 
 已有：
 
@@ -322,15 +310,16 @@ Beta 1：Governed NPC Dialogue Memory Graph
 完成后应具备：
 
 ```text
-1. 对话全文不可变保存
-2. 细粒度 segment / EDU / claim 抽取
-3. episodic memory 与 semantic memory 分层
-4. belief / rumor / misremembering 可表示、可传播、可纠正
-5. LLM 不能固化幻觉为 canonical
-6. salience / decay / dedup / consolidation 可运行
-7. Kuzu 真正承载 memory graph 查询
-8. Chroma 真正承载长文本语义记忆检索
-9. evaluation 能检测污染、错记、过期和越权知识
+1. SQLite 继续作为 EventLog 真值源
+2. Kuzu 真正承载 memory graph 查询，而不是只走 fallback dict/list
+3. Chroma 真正承载 scoped long-term memory retrieval，而不是只靠 mock hash
+4. 对话全文不可变保存
+5. 细粒度 segment / EDU / claim 抽取
+6. episodic memory 与 semantic memory 分层
+7. belief / rumor / misremembering 可表示、可传播、可纠正
+8. LLM 不能固化幻觉为 canonical
+9. salience / decay / dedup / consolidation 可运行
+10. evaluation 能检测污染、错记、过期和越权知识
 ```
 
 ---
@@ -340,7 +329,12 @@ Beta 1：Governed NPC Dialogue Memory Graph
 ```text
 POST /v1/conversation/turn
         ↓
-SQLite: ConversationTurnAdded event
+SQLite: ConversationTurnAdded / NPC_DIALOGUE event
+        ↓
+Projectors
+        ↓
+Kuzu: EventNode / MemoryNode / subjective memory graph
+Chroma: source / segment / memory vector index
         ↓
 ConversationSegmenter
         ↓
@@ -360,11 +354,19 @@ MemoryGovernor
         ↓
 SQLite: memory_ops + ADD_MEMORY / FLAG_RUMOR / CORRECT_MEMORY events
         ↓
-KuzuProjector: typed memory graph
+KuzuProjector: typed memory graph evolution
         ↓
-ChromaProjector: segment / episode / memory vector index
+ChromaProjector: scoped memory retrieval index
         ↓
 NPCDialogue: scoped recall + belief-aware answer
+```
+
+关键点：
+
+```text
+Kuzu / Chroma 不决定真值，但必须真实参与查询与检索。
+LLM 不直接写 canonical，只能写候选 claim / memory op。
+所有长期记忆必须有 source_event_id + segment span + evidence_refs。
 ```
 
 ---
@@ -536,18 +538,20 @@ RECALLED_IN
 
 ## 6. 模块开发计划
 
-## Phase 1：Conversation Ledger 完整化
+## Phase 1：Conversation Ledger + Claim Schema
 
-目标：对话全文可作为不可变证据账本。
+目标：对话全文可作为不可变证据账本，并先补齐 claim 级数据结构。
 
 任务：
 
 ```text
 1. 新增 conversation_turns 表
-2. NPC dialogue 时保存 player utterance 与 NPC answer 两条 conversation_turn
-3. 每条 conversation_turn 绑定 source_event_id
-4. source_texts 继续保留拼接全文，但不替代 conversation_turn
-5. Chroma world_sources 写入 turn-level 与 segment-level 两种文档
+2. 新增 memory_claims 表
+3. 新增 memory_consolidations 表
+4. NPC dialogue 时保存 player utterance 与 NPC answer 两条 conversation_turn
+5. 每条 conversation_turn 绑定 source_event_id
+6. source_texts 继续保留拼接全文，但不替代 conversation_turn
+7. 每个 conversation_turn / source_text 都有可追溯 evidence_refs
 ```
 
 验收：
@@ -558,12 +562,79 @@ POST /v1/conversation/turn 后：
 - events 有 NPC_DIALOGUE
 - conversation_turns 有 player/npc utterance
 - source_texts 有全文证据
-- Chroma 可检索对应原文
+- memory_claims / memory_consolidations schema 已存在
+- replay 不丢失 conversation_turns 的来源关系
 ```
 
 ---
 
-## Phase 2：Segment / EDU / Claim 抽取
+## Phase 2：Kuzu Native Memory Graph 主路径
+
+目标：先让 Kuzu 真正承载 memory graph，而不是只作为 fallback wrapper。
+
+任务：
+
+```text
+1. KuzuStore.upsert_entity 执行 Cypher CREATE/MERGE 或等价幂等写入
+2. KuzuStore.upsert_memory 执行 MemoryNode 写入
+3. KuzuStore.upsert_event 执行 EventNode 写入
+4. KuzuStore.upsert_relation 执行 RELATES 写入
+5. 增加 SUPPORTS / CONTRADICTS / SUPERSEDES / HEARD_FROM / CORRECTED_BY / MERGED_FROM 关系表
+6. query_neighbors 使用 Kuzu 查询
+7. query_current_graph 使用 Kuzu 查询
+8. 新增 query_memory_evolution(memory_id)
+9. 新增 query_beliefs(owner_id, topic)
+10. 新增 query_rumor_spread(claim_key)
+```
+
+fallback 策略：
+
+```text
+backend=kuzu：必须走 Kuzu native 写入与查询
+backend=fallback：仅用于没有 kuzu 依赖或单元测试环境
+```
+
+验收：
+
+```text
+GET /worlds/{world_id}/kuzu/graph 返回 backend=kuzu 时，数据来自 Kuzu 查询而非 Python dict/list。
+KuzuProjector.rebuild(world_id) 后，Kuzu 查询结果与 SQLite nodes/edges/memories/events 一致。
+memory evolution / rumor spread 查询可返回关系链。
+```
+
+---
+
+## Phase 3：Chroma Real Embedding + Scoped Retrieval 主路径
+
+目标：让 Chroma 检索成为 NPC 对话的真实长期记忆来源，而不是 mock hash 演示。
+
+任务：
+
+```text
+1. EmbeddingClient 支持 OpenAI-compatible embeddings
+2. mock embedding 仅用于 test / no-model mode
+3. GAME_WORLD_KG_EMBEDDING_PROVIDER=mock|openai_compatible
+4. GAME_WORLD_KG_EMBEDDING_MODEL=bge-m3
+5. world_sources 写 turn-level / segment-level 文档
+6. world_memories 写 episodic / semantic / belief / rumor 文档
+7. world_events 写 event summary
+8. 检索必须带 world_id + owner_id + scope_key filter
+9. roleplay mode 只返回该 NPC 可知记忆
+10. dev mode 可返回全部证据与 scope
+```
+
+验收：
+
+```text
+NPC 不能检索到其他 NPC 私有记忆。
+dev mode 可以看到 scope、evidence、confidence。
+bge-m3 服务启用后，语义近似问题能召回相关 memory。
+mock mode 下所有单测稳定可跑。
+```
+
+---
+
+## Phase 4：Segment / EDU / Claim 抽取
 
 目标：从 turn-level 进入 event-centric memory unit。
 
@@ -589,17 +660,18 @@ POST /v1/conversation/turn 后：
 答应/承诺/保证 → promise
 ```
 
-第二版再加 LLM extractor。
+第二版再加 LLM extractor，但 LLM 只能输出 candidate claim。
 
 验收：
 
 ```text
 一段 NPC 回答包含 3 个 claim 时，memory_claims 应有 3 条，而不是 1 条混合记忆。
+每条 claim 都有 source_event_id、segment_id、evidence span、confidence、scope_key。
 ```
 
 ---
 
-## Phase 3：Governed MemoryOpGenerator
+## Phase 5：Governed MemoryOpGenerator
 
 目标：MemoryOp 不再只记录“玩家问过什么”，而是从 claim 生成治理化操作。
 
@@ -637,7 +709,7 @@ canonical conflict → review 或 rumor，不覆盖 canonical
 
 ---
 
-## Phase 4：Dedup / Merge / Supersedes
+## Phase 6：Dedup / Merge / Supersedes / Consolidation
 
 目标：让长期记忆不无限膨胀，也不粗暴覆盖。
 
@@ -650,7 +722,7 @@ canonical conflict → review 或 rumor，不覆盖 canonical
 4. semantic duplicate merge
 5. conflicting value supersedes
 6. memory_consolidations 写入
-7. Kuzu 写 MERGED_FROM / SUPERSEDES / CONTRADICTS
+7. Kuzu 写 MERGED_FROM / SUPERSEDES / CONTRADICTS / CORRECTED_BY
 ```
 
 推荐规则：
@@ -669,7 +741,7 @@ correction claim 指向旧 claim → CORRECT_MEMORY
 
 ---
 
-## Phase 5：Salience / Decay / Recall Update
+## Phase 7：Salience / Decay / Recall Update
 
 目标：实现记忆强度随时间和回忆变化。
 
@@ -716,57 +788,6 @@ uncertain: very_fast
 
 ---
 
-## Phase 6：Kuzu Native Memory Graph
-
-目标：Kuzu 真正承载 memory graph，而不是只作为 fallback wrapper。
-
-任务：
-
-```text
-1. KuzuStore.upsert_entity 执行 Cypher MERGE/CREATE
-2. KuzuStore.upsert_memory 执行 MemoryNode 写入
-3. KuzuStore.upsert_relation 执行 RELATES 写入
-4. 增加 SUPPORTS / CONTRADICTS / SUPERSEDES / HEARD_FROM 等关系表
-5. query_neighbors 使用 Cypher 查询
-6. query_memory_evolution(memory_id)
-7. query_beliefs(owner_id, topic)
-8. query_rumor_spread(claim_key)
-```
-
-验收：
-
-```text
-GET /worlds/{world_id}/kuzu/graph 返回 backend=kuzu，且数据来自 Kuzu 查询而非内存 dict。
-```
-
----
-
-## Phase 7：Chroma Real Embedding + Scoped Retrieval
-
-目标：让 Chroma 检索成为 NPC 对话的真实长期记忆来源。
-
-任务：
-
-```text
-1. EmbeddingClient 支持 OpenAI-compatible embeddings
-2. mock embedding 仅用于 test
-3. world_sources 写 turn/segment 文档
-4. world_memories 写 episodic/semantic/belief/rumor 文档
-5. 检索必须带 world_id + owner_id + scope_key filter
-6. roleplay mode 只返回该 NPC 可知记忆
-7. dev mode 可返回全部证据与 scope
-```
-
-验收：
-
-```text
-- NPC 不能检索到其他 NPC 私有记忆
-- dev mode 可以看到 scope 与证据
-- bge-m3 服务启用后，语义近似问题能召回相关 memory
-```
-
----
-
 ## Phase 8：Anti-Hallucination Evaluation
 
 目标：把研究报告指标固化为测试。
@@ -783,6 +804,8 @@ review_rate
 rumor_correction_rate
 npc_privileged_knowledge_rate
 memory_dedup_rate
+kuzu_projection_consistency
+chroma_scoped_retrieval_accuracy
 ```
 
 测试场景：
@@ -794,6 +817,8 @@ memory_dedup_rate
 4. 玩家私下藏钥匙，守卫不知道 → 守卫问答不得泄露
 5. 同一传闻重复 5 次 → merge/reinforce，不生成 5 条独立记忆
 6. 旧记忆与新纠正冲突 → SUPERSEDES 或 CORRECTED_BY
+7. Kuzu rebuild 后 memory graph 与 SQLite event log 一致
+8. Chroma roleplay mode 不能召回其他 NPC 私有记忆
 ```
 
 验收阈值：
@@ -805,6 +830,8 @@ npc_privileged_knowledge_rate <= 5%
 unsupported_claim_rate <= 5%
 stale_conflict_miss_rate <= 10%
 memory_dedup_rate >= 80%
+kuzu_projection_consistency = 100%
+chroma_scoped_retrieval_accuracy >= 90%
 ```
 
 ---
@@ -849,7 +876,33 @@ pytest 覆盖原文不可变保存
 
 ---
 
-### Issue 2：Implement segment/EDU/claim extraction pipeline
+### Issue 2：Make Kuzu native memory graph path real
+
+验收：
+
+```text
+KuzuStore 写入和查询使用 Kuzu native API / Cypher
+backend=kuzu 时不依赖内存 dict/list
+支持 memory evolution / rumor spread 查询
+Kuzu rebuild 与 SQLite source of truth 一致
+```
+
+---
+
+### Issue 3：Add real scoped Chroma retrieval with mock/openai-compatible embedding
+
+验收：
+
+```text
+支持 mock 与 OpenAI-compatible embedding
+world_sources/world_memories 有 scope metadata
+owner_id + scope_key filter 严格生效
+roleplay mode 不能越权召回
+```
+
+---
+
+### Issue 4：Implement segment/EDU/claim extraction pipeline
 
 验收：
 
@@ -861,7 +914,7 @@ pytest 覆盖原文不可变保存
 
 ---
 
-### Issue 3：Implement governed MemoryOpGenerator
+### Issue 5：Implement governed MemoryOpGenerator
 
 验收：
 
@@ -874,7 +927,7 @@ canonical conflict → review
 
 ---
 
-### Issue 4：Implement dedup/merge/supersedes/consolidation
+### Issue 6：Implement dedup/merge/supersedes/consolidation
 
 验收：
 
@@ -882,11 +935,12 @@ canonical conflict → review
 重复传闻 merge
 冲突记忆产生 CONTRADICTS/SUPERSEDES
 memory_consolidations 有记录
+Kuzu 中可查询演化链
 ```
 
 ---
 
-### Issue 5：Implement salience/decay/recall strength
+### Issue 7：Implement salience/decay/recall strength
 
 验收：
 
@@ -894,30 +948,6 @@ memory_consolidations 有记录
 /v1/memory/query 返回 effective_strength
 rumor 衰减快于 semantic
 recall 更新 last_recalled_turn
-```
-
----
-
-### Issue 6：Make Kuzu native graph path real
-
-验收：
-
-```text
-KuzuStore 写入和查询使用 Cypher
-backend=kuzu 时不依赖内存 dict
-支持 memory evolution / rumor spread 查询
-```
-
----
-
-### Issue 7：Add real embedding client for Chroma
-
-验收：
-
-```text
-支持 mock 与 OpenAI-compatible embedding
-world_sources/world_memories 有 scope metadata
-owner_id filter 严格生效
 ```
 
 ---
@@ -930,6 +960,8 @@ owner_id filter 严格生效
 canonical_contamination_rate = 0%
 provenance_coverage = 100%
 npc_privileged_knowledge_rate <= 5%
+kuzu_projection_consistency = 100%
+chroma_scoped_retrieval_accuracy >= 90%
 pytest + /evaluation 均可查看
 ```
 
@@ -949,7 +981,7 @@ pytest + /evaluation 均可查看
 
 当前阶段最重要的是：
 
-> 把 NPC 对话记忆这条链做可靠。否则后续世界自运行会被错误记忆、幻觉和谣言污染拖垮。
+> 把 NPC 对话记忆这条链做可靠，并且真实验证 SQLite + Kuzu + Chroma 三层架构。否则后续世界自运行会被错误记忆、幻觉和谣言污染拖垮。
 
 ---
 
@@ -966,7 +998,8 @@ NPC 可以听信传闻，也可以被纠正；
 重复记忆会合并，旧记忆会衰减；
 Kuzu 能查询记忆演化链；
 Chroma 能按 owner/scope 召回相关记忆；
-评估能量化 unsupported claim、canonical contamination、privileged knowledge。
+评估能量化 unsupported claim、canonical contamination、privileged knowledge；
+Kuzu/Chroma rebuild 后与 SQLite EventLog 一致。
 ```
 
 这一步完成后，项目才真正具备“长期运行的 NPC 记忆系统”。
