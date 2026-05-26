@@ -149,6 +149,21 @@ CREATE TABLE IF NOT EXISTS projection_status (
     PRIMARY KEY (world_id, projector)
 );
 
+CREATE TABLE IF NOT EXISTS action_templates (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    action_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    target_id TEXT,
+    risk TEXT NOT NULL DEFAULT 'low',
+    reason TEXT NOT NULL DEFAULT '',
+    preconditions_json TEXT NOT NULL DEFAULT '[]',
+    effects_json TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    UNIQUE(world_id, action_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_world_turn ON events(world_id, turn_index, event_order);
 CREATE INDEX IF NOT EXISTS idx_states_world_entity ON states(world_id, entity_id);
 CREATE INDEX IF NOT EXISTS idx_edges_world_src ON edges(world_id, src_id, valid_to_turn);
@@ -156,3 +171,4 @@ CREATE INDEX IF NOT EXISTS idx_memories_world_owner ON memories(world_id, owner_
 CREATE INDEX IF NOT EXISTS idx_outbox_status_topic ON outbox(status, topic, created_at);
 CREATE INDEX IF NOT EXISTS idx_source_texts_world ON source_texts(world_id, source_type);
 CREATE INDEX IF NOT EXISTS idx_evidence_refs_world ON evidence_refs(world_id, source_id);
+CREATE INDEX IF NOT EXISTS idx_action_templates_world ON action_templates(world_id, enabled);

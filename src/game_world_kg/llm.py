@@ -19,6 +19,7 @@ ALLOWED_ACTION_IDS = {
     "ask_guard_open_gate",
     "bribe_guard",
     "steal_silver_key",
+    "enter_inner_city",
     "rumor_player_stole_key",
     "guard_suspects_player",
 }

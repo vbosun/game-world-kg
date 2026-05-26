@@ -42,6 +42,25 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     _add_column(conn, "events", "causal_parents_json", "TEXT NOT NULL DEFAULT '[]'")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS action_templates (
+            id TEXT PRIMARY KEY,
+            world_id TEXT NOT NULL,
+            action_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            target_id TEXT,
+            risk TEXT NOT NULL DEFAULT 'low',
+            reason TEXT NOT NULL DEFAULT '',
+            preconditions_json TEXT NOT NULL DEFAULT '[]',
+            effects_json TEXT NOT NULL DEFAULT '[]',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            UNIQUE(world_id, action_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_action_templates_world ON action_templates(world_id, enabled)")
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

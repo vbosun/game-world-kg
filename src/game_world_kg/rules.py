@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from .action_template import ActionResolver
 from .affordance import AffordanceEngine
 from .events import EventLog, EventRecord
 from .projector import StateProjector, delta
@@ -37,6 +38,15 @@ class RuleEngine:
     ) -> RuleResult:
         action_id = action_id or self.parse_action(player_input)
         evidence = [{"source_id": evidence_source_id or turn_id, "span": evidence_span or [0, len(player_input)], "extractor": extractor, "confidence": confidence}]
+        templated = ActionResolver(self.conn).resolve(world_id, turn_id, turn_index, action_id, evidence)
+        if templated is not None:
+            return RuleResult(
+                templated.action_id,
+                templated.accepted,
+                templated.reason,
+                templated.narration,
+                templated.events,
+            )
         if action_id == "show_pass_token":
             return self._show_pass_token(world_id, turn_id, turn_index, evidence)
         if action_id == "unlock_gate_with_key":
@@ -71,6 +81,8 @@ class RuleEngine:
         if "钥匙" in text and any(word in text for word in ["开门", "打开", "开铁门"]):
             return "unlock_gate_with_key"
         if "放行" in text or "进去" in text or "进入内城" in text:
+            if "进入内城" in text:
+                return "enter_inner_city"
             return "ask_guard_open_gate"
         if "贿赂" in text or "钱袋" in text:
             return "bribe_guard"

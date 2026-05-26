@@ -1,0 +1,289 @@
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from typing import Any
+from uuid import uuid4
+
+from .db import from_json, to_json, utc_now
+from .events import EventLog, EventRecord
+from .projector import StateProjector, delta
+
+
+@dataclass(frozen=True)
+class ActionTemplate:
+    action_id: str
+    label: str
+    target_id: str | None
+    risk: str
+    reason: str
+    preconditions: list[dict[str, Any]]
+    effects: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class ActionResolution:
+    action_id: str
+    accepted: bool
+    reason: str
+    narration: str
+    events: list[EventRecord]
+
+
+class ActionTemplateStore:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+
+    def upsert(self, world_id: str, template: ActionTemplate) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO action_templates(
+                id, world_id, action_id, label, target_id, risk, reason,
+                preconditions_json, effects_json, enabled, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+            ON CONFLICT(world_id, action_id) DO UPDATE SET
+                label = excluded.label,
+                target_id = excluded.target_id,
+                risk = excluded.risk,
+                reason = excluded.reason,
+                preconditions_json = excluded.preconditions_json,
+                effects_json = excluded.effects_json,
+                enabled = 1
+            """,
+            (
+                f"tmpl_{uuid4().hex}",
+                world_id,
+                template.action_id,
+                template.label,
+                template.target_id,
+                template.risk,
+                template.reason,
+                to_json(template.preconditions),
+                to_json(template.effects),
+                utc_now(),
+            ),
+        )
+
+    def get(self, world_id: str, action_id: str) -> ActionTemplate | None:
+        row = self.conn.execute(
+            """
+            SELECT * FROM action_templates
+            WHERE world_id = ? AND action_id = ? AND enabled = 1
+            """,
+            (world_id, action_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return _row_to_template(row)
+
+    def list_enabled(self, world_id: str) -> list[ActionTemplate]:
+        return [
+            _row_to_template(row)
+            for row in self.conn.execute(
+                """
+                SELECT * FROM action_templates
+                WHERE world_id = ? AND enabled = 1
+                ORDER BY action_id
+                """,
+                (world_id,),
+            ).fetchall()
+        ]
+
+
+class PredicateEvaluator:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.state = StateProjector(conn)
+
+    def evaluate(self, world_id: str, predicate: dict[str, Any], bindings: dict[str, str]) -> bool:
+        kind = predicate["type"]
+        if kind == "same_location":
+            return self._state(world_id, predicate["a"], "location", bindings) == self._state(world_id, predicate["b"], "location", bindings)
+        if kind == "has_item":
+            return self._state(world_id, predicate["item"], "holder", bindings) == self._bind(predicate["actor"], bindings)
+        if kind == "state_equals":
+            return self._state(world_id, predicate["entity"], predicate["attr"], bindings, predicate.get("scope", "canonical")) == predicate["value"]
+        if kind == "state_not_equals":
+            return self._state(world_id, predicate["entity"], predicate["attr"], bindings, predicate.get("scope", "canonical")) != predicate["value"]
+        if kind == "relation_at_least":
+            value = self._state(world_id, predicate["entity"], predicate["attr"], bindings, predicate.get("scope", "canonical")) or 0
+            return value >= predicate["value"]
+        if kind == "resource_at_least":
+            value = self._state(world_id, predicate["entity"], predicate["attr"], bindings, predicate.get("scope", "canonical")) or 0
+            return value >= predicate["value"]
+        if kind == "scope_allowed":
+            return predicate.get("scope", "canonical") in {"canonical", "player", "npc", "faction", "rumor", "candidate", "rejected"}
+        raise ValueError(f"unknown predicate type: {kind}")
+
+    def failure_reason(self, predicate: dict[str, Any]) -> str:
+        return predicate.get("reason") or f"前置条件未满足: {predicate['type']}"
+
+    def _state(self, world_id: str, entity: str, attr: str, bindings: dict[str, str], scope: str = "canonical") -> Any:
+        return self.state.get_state(world_id, self._bind(entity, bindings), attr, scope)
+
+    @staticmethod
+    def _bind(value: str, bindings: dict[str, str]) -> str:
+        if value.startswith("$"):
+            return bindings[value[1:]]
+        return value
+
+
+class EffectExecutor:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.state = StateProjector(conn)
+
+    def execute(
+        self,
+        world_id: str,
+        turn_id: str,
+        turn_index: int,
+        actor_id: str,
+        effects: list[dict[str, Any]],
+        bindings: dict[str, str],
+        evidence: list[dict[str, Any]],
+    ) -> list[EventRecord]:
+        log = EventLog(self.conn)
+        events: list[EventRecord] = []
+        for effect in effects:
+            event_type, payload, participants, deltas = self._build_effect(world_id, effect, bindings)
+            event = log.append(
+                world_id,
+                turn_id,
+                turn_index,
+                event_type,
+                actor_id if effect.get("actor") == "$actor" else effect.get("actor", actor_id),
+                payload,
+                participants=participants,
+                state_deltas=deltas,
+                evidence_refs=evidence,
+            )
+            self.state.apply_event(event)
+            events.append(event)
+        return events
+
+    def _build_effect(
+        self,
+        world_id: str,
+        effect: dict[str, Any],
+        bindings: dict[str, str],
+    ) -> tuple[str, dict[str, Any], list[str], list[Any]]:
+        kind = effect["type"]
+        if kind == "transfer_item":
+            item_id = self._bind(effect["item"], bindings)
+            from_id = self._bind(effect["from"], bindings) if effect.get("from") else None
+            to_id = self._bind(effect["to"], bindings)
+            old = self.state.get_state(world_id, item_id, "holder")
+            return "TRANSFER_ITEM", {"item_id": item_id, "from": from_id, "to": to_id}, [item_id, to_id], [delta(item_id, "holder", old, to_id)]
+        if kind == "move_entity":
+            entity_id = self._bind(effect["entity"], bindings)
+            to_location = self._bind(effect["to"], bindings)
+            old = self.state.get_state(world_id, entity_id, "location")
+            return "MOVE_ENTITY", {"entity_id": entity_id, "from": old, "to": to_location}, [entity_id, to_location], [delta(entity_id, "location", old, to_location)]
+        if kind == "change_relation":
+            src = self._bind(effect["src"], bindings)
+            dst = self._bind(effect["dst"], bindings)
+            attr = effect.get("state_attr", f"{effect['rel'].lower()}.{dst}")
+            old = self.state.get_state(world_id, src, attr) or 0
+            amount = effect.get("delta", 0)
+            new = old + amount
+            return (
+                "CHANGE_RELATION",
+                {"src": src, "rel": effect["rel"], "dst": dst, "delta": amount, "value": new},
+                [src, dst],
+                [delta(src, attr, old, new, amount)],
+            )
+        if kind == "set_state":
+            entity_id = self._bind(effect["entity"], bindings)
+            attr = effect["attr"]
+            scope = effect.get("scope", "canonical")
+            old = self.state.get_state(world_id, entity_id, attr, scope)
+            value = effect["value"]
+            return "SET_STATE", {"entity_id": entity_id, "attr": attr, "value": value, "scope": scope}, [entity_id], [delta(entity_id, attr, old, value, scope=scope)]
+        if kind == "delta_resource":
+            entity_id = self._bind(effect["entity"], bindings)
+            attr = effect["attr"]
+            amount = effect["delta"]
+            scope = effect.get("scope", "canonical")
+            old = self.state.get_state(world_id, entity_id, attr, scope) or 0
+            return "DELTA_RESOURCE", {"entity_id": entity_id, "attr": attr, "delta": amount, "scope": scope}, [entity_id], [delta(entity_id, attr, old, old + amount, amount, scope)]
+        if kind == "add_memory":
+            owner_id = self._bind(effect["owner"], bindings)
+            payload = {
+                "owner_id": owner_id,
+                "memory_text": effect["memory_text"],
+                "truth_scope": effect.get("truth_scope", "npc"),
+                "salience": effect.get("salience", 0.5),
+                "valence": effect.get("valence", 0),
+                "confidence": effect.get("confidence", 1.0),
+            }
+            return "ADD_MEMORY", payload, [owner_id], []
+        raise ValueError(f"unknown effect type: {kind}")
+
+    @staticmethod
+    def _bind(value: str, bindings: dict[str, str]) -> str:
+        if value.startswith("$"):
+            return bindings[value[1:]]
+        return value
+
+
+class ActionResolver:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.templates = ActionTemplateStore(conn)
+        self.predicates = PredicateEvaluator(conn)
+        self.effects = EffectExecutor(conn)
+
+    def resolve(
+        self,
+        world_id: str,
+        turn_id: str,
+        turn_index: int,
+        action_id: str,
+        evidence: list[dict[str, Any]],
+        actor_id: str = "player",
+    ) -> ActionResolution | None:
+        template = self.templates.get(world_id, action_id)
+        if template is None:
+            return None
+        bindings = {"actor": actor_id}
+        for predicate in template.preconditions:
+            if not self.predicates.evaluate(world_id, predicate, bindings):
+                reason = self.predicates.failure_reason(predicate)
+                return ActionResolution(action_id, False, reason, reason, [])
+        events = self.effects.execute(world_id, turn_id, turn_index, actor_id, template.effects, bindings, evidence)
+        return ActionResolution(action_id, True, template.reason, template.reason, events)
+
+
+class ActionTemplateEngine:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.templates = ActionTemplateStore(conn)
+        self.predicates = PredicateEvaluator(conn)
+
+    def list_for_actor(self, world_id: str, actor_id: str = "player") -> list[dict[str, Any]]:
+        bindings = {"actor": actor_id}
+        affordances: list[dict[str, Any]] = []
+        for template in self.templates.list_enabled(world_id):
+            if all(self.predicates.evaluate(world_id, item, bindings) for item in template.preconditions):
+                affordances.append(
+                    {
+                        "action_id": template.action_id,
+                        "label": template.label,
+                        "target_id": template.target_id or "",
+                        "risk": template.risk,
+                        "reason": template.reason,
+                    }
+                )
+        return affordances
+
+
+def _row_to_template(row: sqlite3.Row) -> ActionTemplate:
+    return ActionTemplate(
+        action_id=row["action_id"],
+        label=row["label"],
+        target_id=row["target_id"],
+        risk=row["risk"],
+        reason=row["reason"],
+        preconditions=from_json(row["preconditions_json"], []),
+        effects=from_json(row["effects_json"], []),
+    )

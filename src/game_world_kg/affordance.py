@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from .action_template import ActionTemplateEngine
 from .projector import StateProjector
 
 
@@ -12,6 +13,10 @@ class AffordanceEngine:
         self.state = StateProjector(conn)
 
     def list_for_player(self, world_id: str, actor_id: str = "player") -> list[dict[str, Any]]:
+        templated = ActionTemplateEngine(self.conn).list_for_actor(world_id, actor_id)
+        if templated:
+            return templated
+
         player_location = self.state.get_state(world_id, actor_id, "location")
         guard_location = self.state.get_state(world_id, "guard_alos", "location")
         pass_holder = self.state.get_state(world_id, "pass_token", "holder")

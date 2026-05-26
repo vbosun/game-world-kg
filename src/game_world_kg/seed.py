@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from .action_template import ActionTemplate, ActionTemplateStore
 from .db import utc_now
 from .events import EventLog
 from .projector import StateProjector, delta
@@ -14,6 +15,7 @@ DEMO_WORLD_ID = "demo_gate"
 def seed_demo_world(conn: sqlite3.Connection, world_id: str = DEMO_WORLD_ID) -> str:
     row = conn.execute("SELECT id FROM worlds WHERE id = ?", (world_id,)).fetchone()
     if row:
+        seed_action_templates(conn, world_id)
         return world_id
 
     conn.execute(
@@ -80,7 +82,15 @@ def seed_demo_world(conn: sqlite3.Connection, world_id: str = DEMO_WORLD_ID) -> 
         )
         projector.apply_event(event)
 
+    seed_action_templates(conn, world_id)
+
     return world_id
+
+
+def seed_action_templates(conn: sqlite3.Connection, world_id: str = DEMO_WORLD_ID) -> None:
+    store = ActionTemplateStore(conn)
+    for template in _action_templates():
+        store.upsert(world_id, template)
 
 
 def _entity_specs() -> list[dict[str, Any]]:
@@ -107,4 +117,120 @@ def _initial_states() -> list[tuple[str, str, Any]]:
         ("guard_alos", "hostility.player", 0),
         ("player", "gold", 3),
         ("player", "reputation", 0),
+    ]
+
+
+def _action_templates() -> list[ActionTemplate]:
+    return [
+        ActionTemplate(
+            action_id="talk_to_guard",
+            label="和守卫交谈",
+            target_id="guard_alos",
+            risk="low",
+            reason="守卫位于当前地点",
+            preconditions=[{"type": "same_location", "a": "$actor", "b": "guard_alos", "reason": "守卫不在当前位置，不能交谈。"}],
+            effects=[],
+        ),
+        ActionTemplate(
+            action_id="show_pass_token",
+            label="向守卫出示通行令",
+            target_id="guard_alos",
+            risk="low",
+            reason="玩家持有通行令且守卫在场。",
+            preconditions=[
+                {"type": "same_location", "a": "$actor", "b": "guard_alos", "reason": "守卫不在当前位置，不能出示通行令。"},
+                {"type": "has_item", "actor": "$actor", "item": "pass_token", "reason": "玩家没有通行令，规则拒绝该行动。"},
+            ],
+            effects=[
+                {"type": "transfer_item", "item": "pass_token", "from": "$actor", "to": "guard_alos", "actor": "$actor"},
+                {"type": "change_relation", "src": "guard_alos", "rel": "TRUSTS", "dst": "$actor", "state_attr": "trust.player", "delta": 2, "actor": "system"},
+                {
+                    "type": "add_memory",
+                    "owner": "guard_alos",
+                    "memory_text": "玩家主动出示了合法通行令。",
+                    "truth_scope": "npc",
+                    "salience": 0.8,
+                    "valence": 0.2,
+                    "actor": "system",
+                },
+            ],
+        ),
+        ActionTemplate(
+            action_id="ask_guard_open_gate",
+            label="请求守卫放行",
+            target_id="guard_alos",
+            risk="low",
+            reason="守卫信任达到 5。",
+            preconditions=[
+                {"type": "relation_at_least", "entity": "guard_alos", "attr": "trust.player", "value": 5, "reason": "守卫信任不足 5，不会主动放行。"},
+                {"type": "state_not_equals", "entity": "iron_gate", "attr": "open", "value": True, "reason": "铁门已经打开。"},
+            ],
+            effects=[
+                {"type": "set_state", "entity": "iron_gate", "attr": "locked", "value": False, "actor": "guard_alos"},
+                {"type": "set_state", "entity": "iron_gate", "attr": "open", "value": True, "actor": "guard_alos"},
+            ],
+        ),
+        ActionTemplate(
+            action_id="unlock_gate_with_key",
+            label="用银钥匙打开铁门",
+            target_id="iron_gate",
+            risk="low",
+            reason="玩家持有银钥匙。",
+            preconditions=[
+                {"type": "has_item", "actor": "$actor", "item": "silver_key", "reason": "玩家没有银钥匙，不能用钥匙打开铁门。"},
+                {"type": "state_not_equals", "entity": "iron_gate", "attr": "open", "value": True, "reason": "铁门已经打开。"},
+            ],
+            effects=[
+                {"type": "set_state", "entity": "iron_gate", "attr": "locked", "value": False, "actor": "$actor"},
+                {"type": "set_state", "entity": "iron_gate", "attr": "open", "value": True, "actor": "$actor"},
+            ],
+        ),
+        ActionTemplate(
+            action_id="bribe_guard",
+            label="贿赂守卫",
+            target_id="guard_alos",
+            risk="medium",
+            reason="玩家有钱袋且守卫在场。",
+            preconditions=[
+                {"type": "same_location", "a": "$actor", "b": "guard_alos", "reason": "守卫不在当前位置，不能贿赂。"},
+                {"type": "resource_at_least", "entity": "$actor", "attr": "gold", "value": 1, "reason": "玩家没有钱袋，不能贿赂。"},
+            ],
+            effects=[
+                {"type": "delta_resource", "entity": "$actor", "attr": "gold", "delta": -1, "actor": "$actor"},
+                {"type": "delta_resource", "entity": "$actor", "attr": "reputation", "delta": -1, "actor": "system"},
+                {"type": "change_relation", "src": "guard_alos", "rel": "TRUSTS", "dst": "$actor", "state_attr": "trust.player", "delta": 1, "actor": "system"},
+            ],
+        ),
+        ActionTemplate(
+            action_id="steal_silver_key",
+            label="偷取银钥匙",
+            target_id="guard_alos",
+            risk="high",
+            reason="MVP 固定结算：偷钥匙失败并触发敌意。",
+            preconditions=[{"type": "same_location", "a": "$actor", "b": "guard_alos", "reason": "守卫不在当前位置，不能偷钥匙。"}],
+            effects=[
+                {"type": "change_relation", "src": "guard_alos", "rel": "OPPOSES", "dst": "$actor", "state_attr": "hostility.player", "delta": 2, "actor": "system"},
+                {
+                    "type": "add_memory",
+                    "owner": "guard_alos",
+                    "memory_text": "玩家试图偷取银钥匙。",
+                    "truth_scope": "npc",
+                    "salience": 0.9,
+                    "valence": -0.8,
+                    "actor": "system",
+                },
+            ],
+        ),
+        ActionTemplate(
+            action_id="enter_inner_city",
+            label="进入内城",
+            target_id="inner_city",
+            risk="low",
+            reason="铁门已经打开",
+            preconditions=[
+                {"type": "state_equals", "entity": "iron_gate", "attr": "open", "value": True, "reason": "铁门尚未打开，不能进入内城。"},
+                {"type": "state_equals", "entity": "$actor", "attr": "location", "value": "village_gate", "reason": "玩家不在村口。"},
+            ],
+            effects=[{"type": "move_entity", "entity": "$actor", "to": "inner_city", "actor": "$actor"}],
+        ),
     ]
