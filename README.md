@@ -50,6 +50,7 @@
 - [Event Sourcing 与一致性设计](docs/event-sourcing.md)
 - [混合抽取与图谱更新管线](docs/extraction-pipeline.md)
 - [评估体系与 PoC 计划](docs/evaluation.md)
+- [完整本地 Demo 剩余完成计划](docs/demo-completion-plan.md)
 
 ## 当前阶段
 
