@@ -43,7 +43,6 @@
 - [游戏通用知识图谱研究报告](docs/research-report.md)
 - [本地 MVP 落地方案](docs/mvp-plan.md)
 - [SQLite + Kuzu + Chroma 完整本地 Demo 方案](docs/full-local-demo-sqlite-kuzu-chroma-plan.md)
-- [小型本地 Demo 下一步方案（旧版渐进计划）](docs/local-demo-next-plan.md)
 
 严格对齐研究报告的详细设计：
 
