@@ -10,6 +10,7 @@ from .chroma_store import ChromaStore
 from .config import EmbeddingConfig, StorageConfig
 from .db import transaction
 from .events import EventLog
+from .explanation import ExplanationService
 from .graph import WorldGraph
 from .kuzu_store import KuzuStore
 from .llm import ActionParser, LLMClient, Narrator
@@ -247,6 +248,11 @@ class GameWorldService:
                 (world_id,),
             ).fetchall()
         ]
+
+    def explain_state(self, world_id: str, entity_id: str, attr: str, scope: str = "canonical") -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            return ExplanationService(self.conn).explain_state(world_id, entity_id, attr, scope)
 
     def _require_world(self, world_id: str) -> None:
         if self.conn.execute("SELECT 1 FROM worlds WHERE id = ?", (world_id,)).fetchone() is None:

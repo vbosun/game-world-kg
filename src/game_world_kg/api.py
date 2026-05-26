@@ -78,6 +78,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_tensions(world_id: str) -> list[dict[str, Any]]:
         return _handle(lambda: service.tensions(world_id))
 
+    @app.get("/worlds/{world_id}/explain/state/{entity_id}/{attr}")
+    def explain_state(world_id: str, entity_id: str, attr: str, scope: str = "canonical") -> dict[str, Any]:
+        return _handle(lambda: service.explain_state(world_id, entity_id, attr, scope))
+
     @app.get("/worlds/{world_id}/memories")
     def get_memories(world_id: str, owner_id: str | None = None) -> list[dict[str, Any]]:
         return _handle(lambda: service.memories(world_id, owner_id))
