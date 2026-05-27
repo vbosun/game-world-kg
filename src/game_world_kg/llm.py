@@ -61,9 +61,11 @@ class LLMClient(Protocol):
 class OpenAICompatibleClient:
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
+        self.last_raw_text: str | None = None
 
     def complete_json(self, messages: list[dict[str, str]], *, temperature: float = 0, timeout_seconds: float | None = None) -> dict[str, Any]:
         text = self.complete_text(messages, temperature=temperature, timeout_seconds=timeout_seconds)
+        self.last_raw_text = text
         return _loads_json_object(text)
 
     def complete_text(self, messages: list[dict[str, str]], *, temperature: float = 0.4, timeout_seconds: float | None = None) -> str:
@@ -99,9 +101,11 @@ class OpenAICompatibleClient:
 class AnthropicClient:
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
+        self.last_raw_text: str | None = None
 
     def complete_json(self, messages: list[dict[str, str]], *, temperature: float = 0, timeout_seconds: float | None = None) -> dict[str, Any]:
         text = self.complete_text(messages, temperature=temperature, timeout_seconds=timeout_seconds)
+        self.last_raw_text = text
         return _loads_json_object(text)
 
     def complete_text(self, messages: list[dict[str, str]], *, temperature: float = 0.4, timeout_seconds: float | None = None) -> str:
@@ -269,10 +273,31 @@ def _loads_json_object(text: str) -> dict[str, Any]:
     end = stripped.rfind("}")
     if start == -1 or end == -1 or end < start:
         raise LLMError("LLM response did not contain a JSON object")
-    value = json.loads(stripped[start : end + 1])
+    extracted = stripped[start : end + 1]
+    try:
+        value = json.loads(extracted)
+    except json.JSONDecodeError as exc:
+        raise LLMError(_json_error_context(extracted, exc)) from exc
     if not isinstance(value, dict):
         raise LLMError("LLM response JSON was not an object")
     return value
+
+
+def _json_error_context(text: str, error: json.JSONDecodeError, window: int = 3) -> str:
+    lines = text.splitlines() or [text]
+    line_index = max(0, error.lineno - 1)
+    start = max(0, line_index - window)
+    end = min(len(lines), line_index + window + 1)
+    context = "\n".join(f"{idx + 1}: {lines[idx]}" for idx in range(start, end))
+    prefix = text[:160].replace("\n", "\\n")
+    suffix = text[-160:].replace("\n", "\\n")
+    return (
+        f"LLM response contained invalid JSON: {error.msg} "
+        f"at line {error.lineno}, column {error.colno}, char {error.pos}.\n"
+        f"Context:\n{context}\n"
+        f"Extracted prefix: {prefix}\n"
+        f"Extracted suffix: {suffix}"
+    )
 
 
 def _to_anthropic_messages(messages: list[dict[str, str]]) -> tuple[str, list[dict[str, str]]]:
