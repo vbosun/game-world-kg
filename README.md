@@ -41,6 +41,7 @@
 基础文档：
 
 - [游戏通用知识图谱研究报告](docs/research-report.md)
+- [AI 小世界 RPG 可玩性机制蓝图](docs/playable-game-development-research-report.md)
 - [本地 MVP 落地方案](docs/mvp-plan.md)
 - [SQLite + Kuzu + Chroma 完整本地 Demo 方案](docs/full-local-demo-sqlite-kuzu-chroma-plan.md)
 - [WorldSpec 小世界生成器开发方案](docs/world-generator-development-plan.md)
