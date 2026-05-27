@@ -56,15 +56,15 @@ class WorldSpecGenerator:
             self.last_candidate_payload = payload
             normalized = self.normalizer.normalize(payload)
             self.last_normalized_candidate = normalized
-            report = WorldSpecValidator().validate(normalized)
+            report = _safe_validate(normalized)
             source = "llm_candidate"
             if not report["valid"]:
                 normalized = WorldSpecRepairer().repair(normalized, report)
                 self.last_normalized_candidate = normalized
-                report = WorldSpecValidator().validate(normalized)
+                report = _safe_validate(normalized)
                 source = "repaired_llm_candidate"
             if not report["valid"]:
-                self.last_error = json.dumps(report, ensure_ascii=False)
+                self.last_error = "ValidationError: " + json.dumps(report, ensure_ascii=False)
                 return None
             spec = WorldSpec.model_validate(normalized)
             self.last_source = source
@@ -72,7 +72,10 @@ class WorldSpecGenerator:
             return spec
         except Exception as exc:
             self.last_raw_response = getattr(self.llm_client, "last_raw_text", None)
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            if self.last_candidate_payload is not None:
+                self.last_error = f"ValidationError: {type(exc).__name__}: {exc}"
+            else:
+                self.last_error = f"{type(exc).__name__}: {exc}"
             return None
 
     def _record_warnings(self, requested_genre: str, spec_payload: dict[str, Any]) -> None:
@@ -83,6 +86,21 @@ class WorldSpecGenerator:
 
 def normalize_worldspec_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return WorldSpecNormalizer().normalize(payload)
+
+
+def _safe_validate(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return WorldSpecValidator().validate(payload)
+    except Exception as exc:
+        return {
+            "valid": False,
+            "issues": [
+                {
+                    "code": "schema_validation_exception",
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+            ],
+        }
 
 
 def _worldspec_messages(intent: dict[str, str]) -> list[dict[str, str]]:
