@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS worlds (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT,
+    runtime_mode TEXT NOT NULL DEFAULT 'legacy_demo',
     created_at TEXT NOT NULL
 );
 

@@ -4,7 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from .action_template import ActionTemplateEngine, ActionResolver
+from .action_template import ActionTemplateEngine, ActionResolver, ActionTemplateStore
 from .db import transaction
 from .events import EventLog
 from .graph import WorldGraph
@@ -48,7 +48,17 @@ class NPCPlanner:
             for tension in self.service.tensions(world_id)
             if npc_id in tension.get("affected_entities", []) or any(goal.get("goal_id", "") in tension.get("reason", "") for goal in properties.get("goals", []))
         ]
-        actions = ActionTemplateEngine(self.conn).list_for_actor(world_id, npc_id)
+        store = ActionTemplateStore(self.conn)
+        actions = []
+        for action in ActionTemplateEngine(self.conn).list_for_actor(world_id, npc_id):
+            template = store.get(world_id, action["action_id"])
+            actions.append(
+                action
+                | {
+                    "preconditions": template.preconditions if template else [],
+                    "effects": template.effects if template else [],
+                }
+            )
         return PlannerContext(
             world_id=world_id,
             npc_id=npc_id,
@@ -128,14 +138,106 @@ class NPCPlanner:
             return None
         ranked: list[dict[str, Any]] = []
         for action in context.available_actions:
-            score = 0.2
-            if action["action_id"] in {"patrol", "move_to_location"}:
-                score += 0.2
-            if action["action_id"] in {"request_help", "talk_to", "report_to_faction"}:
-                score += 0.15
-            if context.visible_tensions:
-                score += 0.25
-            risk_penalty = {"low": 0, "medium": 0.15, "high": 0.35}.get(action.get("risk", "low"), 0)
-            ranked.append(action | {"score": max(0, score - risk_penalty)})
+            goal_relevance = EffectToGoalMatcher.score(action, context.goals)
+            tension_relevance = TensionRelevanceScorer.score(action, context.visible_tensions)
+            memory_relevance = MemoryRelevanceScorer.score(action, context.known_memories)
+            benefit = RelationResourceBenefitScorer.score(action)
+            risk_penalty = RiskToleranceScorer.penalty(action, context.goals)
+            resource_cost = ResourceCostScorer.cost(action)
+            score = (
+                0.30 * goal_relevance
+                + 0.25 * tension_relevance
+                + 0.15 * memory_relevance
+                + 0.15 * benefit
+                - 0.20 * risk_penalty
+                - 0.10 * resource_cost
+            )
+            ranked.append(action | {"score": round(max(0, score), 4)})
         ranked.sort(key=lambda item: (-item["score"], item["action_id"], item.get("target_id") or ""))
         return ranked[0]
+
+
+class EffectToGoalMatcher:
+    @staticmethod
+    def score(action: dict[str, Any], goals: list[dict[str, Any]]) -> float:
+        if not goals:
+            return 0.2
+        effects = action.get("effects", [])
+        best = 0.0
+        for goal in goals:
+            priority = float(goal.get("priority", 0.5))
+            desired = goal.get("desired_state") or {}
+            goal_id = goal.get("goal_id", "")
+            matched = 0.0
+            if goal_id and goal_id in f"{action.get('action_id', '')} {action.get('reason', '')}":
+                matched = max(matched, 0.5)
+            for effect in effects:
+                if desired and effect.get("entity") == desired.get("entity") and effect.get("attr") == desired.get("attr"):
+                    matched = max(matched, 1.0 if effect.get("value", desired.get("value")) == desired.get("value") else 0.7)
+                if effect.get("type") in {"change_relation", "add_memory"} and any(word in goal_id for word in ["help", "report", "trust", "collect", "news"]):
+                    matched = max(matched, 0.6)
+            best = max(best, priority * (matched or 0.25))
+        return min(1.0, best)
+
+
+class RiskToleranceScorer:
+    @staticmethod
+    def penalty(action: dict[str, Any], goals: list[dict[str, Any]]) -> float:
+        risk = {"low": 0.1, "medium": 0.5, "high": 1.0}.get(action.get("risk", "low"), 0.1)
+        tolerance = max((float(goal.get("risk_tolerance", 0.3)) for goal in goals), default=0.3)
+        return max(0.0, risk - tolerance)
+
+
+class TensionRelevanceScorer:
+    @staticmethod
+    def score(action: dict[str, Any], tensions: list[dict[str, Any]]) -> float:
+        if not tensions:
+            return 0.0
+        action_id = action.get("action_id")
+        target_id = action.get("target_id")
+        best = 0.0
+        for tension in tensions:
+            priority = float(tension.get("priority", 0.5))
+            if action_id in tension.get("suggested_actions", []):
+                best = max(best, priority)
+            if target_id and target_id in tension.get("affected_entities", []):
+                best = max(best, priority * 0.8)
+        return min(1.0, best)
+
+
+class MemoryRelevanceScorer:
+    @staticmethod
+    def score(action: dict[str, Any], memories: list[dict[str, Any]]) -> float:
+        text = f"{action.get('action_id', '')} {action.get('reason', '')} {action.get('target_id', '')}"
+        if not memories:
+            return 0.0
+        hits = 0.0
+        for memory in memories:
+            memory_text = memory.get("memory_text", "")
+            if any(token and token in memory_text for token in text.split("_")):
+                hits += float(memory.get("salience", 0.5))
+        return min(1.0, hits / max(1, len(memories)))
+
+
+class RelationResourceBenefitScorer:
+    @staticmethod
+    def score(action: dict[str, Any]) -> float:
+        score = 0.0
+        for effect in action.get("effects", []):
+            if effect.get("type") == "change_relation" and effect.get("delta", 0) > 0:
+                score = max(score, 0.8)
+            if effect.get("type") == "delta_resource" and effect.get("delta", 0) > 0:
+                score = max(score, 0.8)
+            if effect.get("type") == "add_memory":
+                score = max(score, 0.4)
+        return score
+
+
+class ResourceCostScorer:
+    @staticmethod
+    def cost(action: dict[str, Any]) -> float:
+        cost = 0.0
+        for effect in action.get("effects", []):
+            if effect.get("type") == "delta_resource" and effect.get("delta", 0) < 0:
+                cost += min(1.0, abs(float(effect["delta"])) / 5)
+        return min(1.0, cost)

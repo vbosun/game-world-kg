@@ -41,6 +41,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
+    _add_column(conn, "worlds", "runtime_mode", "TEXT NOT NULL DEFAULT 'legacy_demo'")
     _add_column(conn, "events", "causal_parents_json", "TEXT NOT NULL DEFAULT '[]'")
     _add_column(conn, "memories", "scope_key", "TEXT NOT NULL DEFAULT ''")
     _add_column(conn, "memories", "layer", "TEXT NOT NULL DEFAULT 'episodic'")

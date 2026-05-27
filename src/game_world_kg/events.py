@@ -45,6 +45,26 @@ class EventLog:
         ).fetchone()
         return int(row["next_turn"])
 
+    def create_bootstrap_turn(self, world_id: str, bootstrap_run_id: str, narration: str | None = None) -> str:
+        existing = self.conn.execute(
+            """
+            SELECT id FROM turns
+            WHERE world_id = ? AND turn_index = 0 AND player_input = ?
+            """,
+            (world_id, f"bootstrap:{bootstrap_run_id}"),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["id"])
+        turn_id = f"turn_{uuid4().hex}"
+        self.conn.execute(
+            """
+            INSERT INTO turns(id, world_id, turn_index, player_input, narration, created_at)
+            VALUES (?, ?, 0, ?, ?, ?)
+            """,
+            (turn_id, world_id, f"bootstrap:{bootstrap_run_id}", narration or "WorldSpec bootstrap.", utc_now()),
+        )
+        return turn_id
+
     def create_turn(self, world_id: str, player_input: str | None, narration: str | None = None) -> str:
         turn_id = f"turn_{uuid4().hex}"
         turn_index = self.next_turn_index(world_id)

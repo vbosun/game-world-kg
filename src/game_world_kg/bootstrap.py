@@ -5,9 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from .action_template import ActionTemplate, ActionTemplateStore
 from .db import from_json, to_json, utc_now
-from .events import EventLog, EventRecord
+from .events import EventLog
 from .projector import StateProjector, delta
 from .worldspec import WorldSpec, WorldSpecValidator
 
@@ -250,22 +249,25 @@ class WorldBootstrapper:
 
         self.conn.execute(
             """
-            INSERT INTO worlds(id, name, description, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description
+            INSERT INTO worlds(id, name, description, runtime_mode, created_at)
+            VALUES (?, ?, ?, 'template_only', ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                runtime_mode = 'template_only'
             """,
             (spec.world_id, spec.title, spec.theme, utc_now()),
         )
         run_id = f"boot_{uuid4().hex}"
         log = EventLog(self.conn)
+        bootstrap_turn_id = log.create_bootstrap_turn(spec.world_id, run_id, f"Bootstrap WorldSpec {spec.title}.")
         projector = StateProjector(self.conn)
-        action_store = ActionTemplateStore(self.conn)
         event_ids: list[str] = []
         for draft in BootstrapCompiler().compile(spec):
             state_delta = draft.get("state_delta")
             event = log.append(
                 spec.world_id,
-                None,
+                bootstrap_turn_id,
                 0,
                 draft["event_type"],
                 draft.get("actor_id"),
@@ -274,7 +276,7 @@ class WorldBootstrapper:
                 state_deltas=[state_delta] if state_delta is not None else [],
                 evidence_refs=[{"source_id": world_spec_id, "source_type": "world_spec", "extractor": "bootstrap_compiler_v1", "confidence": 1.0}],
             )
-            _apply_bootstrap_side_effect(projector, action_store, event)
+            projector.apply_event(event)
             event_ids.append(event.id)
         self.conn.execute(
             """
@@ -284,26 +286,6 @@ class WorldBootstrapper:
             (run_id, spec.world_id, world_spec_id, spec_hash, to_json(event_ids), utc_now()),
         )
         return BootstrapResult(spec.world_id, world_spec_id, spec_hash, run_id, False, event_ids, report)
-
-
-def _apply_bootstrap_side_effect(projector: StateProjector, action_store: ActionTemplateStore, event: EventRecord) -> None:
-    if event.event_type == "CREATE_ACTION_TEMPLATE":
-        payload = event.payload
-        action_store.upsert(
-            event.world_id,
-            ActionTemplate(
-                action_id=payload["action_id"],
-                label=payload["label_template"],
-                target_id=None,
-                risk=payload.get("risk", "low"),
-                reason=payload.get("reason", ""),
-                preconditions=payload.get("preconditions", []),
-                effects=payload.get("effects", []),
-                target_selector=payload.get("target_selector", {}),
-                arg_schema=payload.get("arg_schema", {}),
-            ),
-        )
-    projector.apply_event(event)
 
 
 def _world_spec_row(row: sqlite3.Row) -> dict[str, Any]:

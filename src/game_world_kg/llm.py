@@ -12,7 +12,7 @@ from .config import LLMConfig
 from .rules import RuleResult
 
 
-ALLOWED_ACTION_IDS = {
+LEGACY_ACTION_IDS = {
     "move_to_location",
     "talk_to_guard",
     "show_pass_token",
@@ -34,6 +34,7 @@ ALLOWED_ACTION_IDS = {
     "rumor_player_stole_key",
     "guard_suspects_player",
 }
+ALLOWED_ACTION_IDS = LEGACY_ACTION_IDS
 
 
 class ActionCandidate(BaseModel):
@@ -43,16 +44,16 @@ class ActionCandidate(BaseModel):
     reason: str = ""
 
     def valid_action_id(self) -> str | None:
-        if self.action_id in ALLOWED_ACTION_IDS:
+        if self.action_id in LEGACY_ACTION_IDS:
             return self.action_id
         return None
 
 
 class LLMClient(Protocol):
-    def complete_json(self, messages: list[dict[str, str]], *, temperature: float = 0) -> dict[str, Any]:
+    def complete_json(self, messages: list[dict[str, str]], *, temperature: float = 0, timeout_seconds: float | None = None) -> dict[str, Any]:
         ...
 
-    def complete_text(self, messages: list[dict[str, str]], *, temperature: float = 0.4) -> str:
+    def complete_text(self, messages: list[dict[str, str]], *, temperature: float = 0.4, timeout_seconds: float | None = None) -> str:
         ...
 
 
@@ -60,11 +61,11 @@ class OpenAICompatibleClient:
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
 
-    def complete_json(self, messages: list[dict[str, str]], *, temperature: float = 0) -> dict[str, Any]:
-        text = self.complete_text(messages, temperature=temperature)
+    def complete_json(self, messages: list[dict[str, str]], *, temperature: float = 0, timeout_seconds: float | None = None) -> dict[str, Any]:
+        text = self.complete_text(messages, temperature=temperature, timeout_seconds=timeout_seconds)
         return _loads_json_object(text)
 
-    def complete_text(self, messages: list[dict[str, str]], *, temperature: float = 0.4) -> str:
+    def complete_text(self, messages: list[dict[str, str]], *, temperature: float = 0.4, timeout_seconds: float | None = None) -> str:
         payload = {
             "model": self.config.model,
             "messages": messages,
@@ -77,7 +78,8 @@ class OpenAICompatibleClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
+            timeout = self.config.timeout_seconds if timeout_seconds is None else timeout_seconds
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise LLMError(str(exc)) from exc
@@ -101,17 +103,19 @@ class LLMError(RuntimeError):
 class ActionParser:
     client: LLMClient | None
 
-    def parse(self, player_input: str, state_summary: dict[str, Any], affordances: list[dict[str, Any]]) -> ActionCandidate | None:
+    def parse(self, player_input: str, state_summary: dict[str, Any], affordances: list[dict[str, Any]], *, require_current_affordance: bool = False) -> ActionCandidate | None:
         if self.client is None:
             return None
+        available = {(item["action_id"], item.get("target_id") or None) for item in affordances}
+        available_action_ids = {item[0] for item in available}
         messages = [
             {
                 "role": "system",
                 "content": (
                     "你是游戏行动解析器。只输出 JSON 对象，不要解释。"
-                    "从玩家输入中选择一个候选 action_id。"
-                    f"action_id 只能是: {', '.join(sorted(ALLOWED_ACTION_IDS))}。"
-                    "如果选择 move_to_location，必须从 affordances 中复制目标 target_id。"
+                    "必须从 affordances 中选择当前可用的 action_id 和 target_id。"
+                    f"当前可用 action_id 只能是: {', '.join(sorted(available_action_ids))}。"
+                    "如果 affordance 有 target_id，必须原样复制 target_id。"
                     "不要决定行动是否合法，规则引擎会裁判。"
                     "格式: {\"action_id\":\"...\",\"target_id\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}"
                 ),
@@ -132,7 +136,10 @@ class ActionParser:
             candidate = ActionCandidate.model_validate(self.client.complete_json(messages, temperature=0))
         except (LLMError, ValidationError):
             return None
-        if candidate.valid_action_id() is None:
+        target = candidate.target_id or None
+        if require_current_affordance and (candidate.action_id, target) not in available and candidate.action_id not in {action_id for action_id, target_id in available if target_id is None}:
+            return None
+        if not require_current_affordance and candidate.valid_action_id() is None:
             return None
         return candidate
 

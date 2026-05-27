@@ -67,6 +67,9 @@ class StateProjector:
         self.conn.execute("DELETE FROM nodes WHERE world_id = ?", (world_id,))
         self.conn.execute("DELETE FROM edges WHERE world_id = ?", (world_id,))
         self.conn.execute("DELETE FROM memories WHERE world_id = ?", (world_id,))
+        mode_row = self.conn.execute("SELECT runtime_mode FROM worlds WHERE id = ?", (world_id,)).fetchone()
+        if mode_row is not None and mode_row["runtime_mode"] == "template_only":
+            self.conn.execute("DELETE FROM action_templates WHERE world_id = ?", (world_id,))
         for event in EventLog(self.conn).list(world_id, to_turn):
             self.apply_event(event)
 
@@ -121,6 +124,22 @@ class StateProjector:
         payload = event.payload
         action_id = payload["action_id"]
         self._insert_bootstrap_node(event, action_id, "ActionTemplate", payload.get("label_template") or action_id, payload)
+        from .action_template import ActionTemplate, ActionTemplateStore
+
+        ActionTemplateStore(self.conn).upsert(
+            event.world_id,
+            ActionTemplate(
+                action_id=action_id,
+                label=payload["label_template"],
+                target_id=None,
+                risk=payload.get("risk", "low"),
+                reason=payload.get("reason", ""),
+                preconditions=payload.get("preconditions", []),
+                effects=payload.get("effects", []),
+                target_selector=payload.get("target_selector", {}),
+                arg_schema=payload.get("arg_schema", {}),
+            ),
+        )
 
     def _apply_add_tension(self, event: EventRecord) -> None:
         payload = event.payload

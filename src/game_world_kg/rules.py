@@ -37,8 +37,11 @@ class RuleEngine:
         evidence_source_id: str | None = None,
         evidence_span: list[int] | None = None,
     ) -> RuleResult:
-        if action_id is None:
+        runtime_mode = self._runtime_mode(world_id)
+        if action_id is None and runtime_mode != "template_only":
             action_id, target_id = self.parse_action_candidate(player_input)
+        if action_id is None:
+            return self._reject("__unparsed__", "无法从当前可行动作中解析出合法行动。")
         evidence = [{"source_id": evidence_source_id or turn_id, "span": evidence_span or [0, len(player_input)], "extractor": extractor, "confidence": confidence}]
         templated = ActionResolver(self.conn).resolve(world_id, turn_id, turn_index, action_id, evidence, target_id=target_id)
         if templated is not None:
@@ -49,6 +52,8 @@ class RuleEngine:
                 templated.narration,
                 templated.events,
             )
+        if runtime_mode == "template_only":
+            return self._reject(action_id, "action template not found")
         if action_id == "show_pass_token":
             return self._show_pass_token(world_id, turn_id, turn_index, evidence)
         if action_id == "unlock_gate_with_key":
@@ -336,6 +341,10 @@ class RuleEngine:
 
     def _same_location(self, world_id: str, a: str, b: str) -> bool:
         return self.state.get_state(world_id, a, "location") == self.state.get_state(world_id, b, "location")
+
+    def _runtime_mode(self, world_id: str) -> str:
+        row = self.conn.execute("SELECT runtime_mode FROM worlds WHERE id = ?", (world_id,)).fetchone()
+        return row["runtime_mode"] if row and row["runtime_mode"] else "legacy_demo"
 
     @staticmethod
     def _reject(action_id: str, reason: str) -> RuleResult:

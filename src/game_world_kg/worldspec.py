@@ -19,6 +19,7 @@ SUPPORTED_PREDICATES = {
     "relation_at_least",
     "resource_at_least",
     "connected_location",
+    "edge_unblocked",
     "scope_allowed",
 }
 SUPPORTED_EFFECTS = {
@@ -323,31 +324,52 @@ class WorldIntentExtractor:
         genre = "cultivation" if any(word in idea for word in ["修仙", "外门", "宗门", "妖兽"]) else "village"
         if any(word in idea for word in ["海", "海洋", "岛", "船"]):
             genre = "ocean"
-        title = "青木镇外门风波" if genre == "cultivation" else ("潮汐群岛失衡" if genre == "ocean" else "边村铁门风波")
-        return {"idea": idea, "genre": genre, "title": title}
+        return {"idea": idea, "genre": genre, "title_hint": _derive_title(idea, genre)}
 
 
 class WorldSpecGenerator:
     def __init__(self, llm_client: Any | None = None) -> None:
         self.llm_client = llm_client
+        self.last_source = "sample_fallback"
+        self.last_candidate_payload: dict[str, Any] | None = None
+        self.last_repair_prompt: dict[str, Any] | None = None
 
     def generate(self, idea: str) -> WorldSpec:
         intent = WorldIntentExtractor().extract(idea)
         if self.llm_client is not None:
             spec = self._generate_with_llm(intent)
             if spec is not None:
+                self.last_source = "llm_candidate"
                 return spec
+        self.last_source = "sample_fallback"
         return sample_world_spec(intent["genre"], idea)
 
     def _generate_with_llm(self, intent: dict[str, str]) -> WorldSpec | None:
         try:
+            timeout_seconds = getattr(getattr(self.llm_client, "config", None), "worldgen_timeout_seconds", None)
+            timeout_kwargs = {"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}
             payload = self.llm_client.complete_json(
                 [
-                    {"role": "system", "content": "Generate a strict JSON WorldSpec for a small_dense game world. Use only supported predicate/effect types."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "Generate a strict JSON WorldSpec candidate only; never bootstrap or mutate canonical state. "
+                            "Top-level fields: world_id,title,genre,theme,starting_area,scale,player_start,locations,characters,items,factions,"
+                            "resources,rules,action_templates,initial_states,initial_memories,initial_tensions,initial_quests,background_lore. "
+                            "small_dense constraints: locations 6-10, characters 5-8, items 8-15, factions 2-4, action_templates 8-15, tensions 3-5, quests 2-4. "
+                            f"Supported predicates: {', '.join(sorted(SUPPORTED_PREDICATES))}. "
+                            f"Supported effects: {', '.join(sorted(SUPPORTED_EFFECTS))}. "
+                            "NPC beliefs must use npc/faction/rumor/player scopes, never canonical memory. "
+                            "Quests must include tension_id and evidence. Create an original title from the user's idea; "
+                            "do not copy title_hint verbatim unless it is clearly the best title. Output one JSON object only."
+                        ),
+                    },
                     {"role": "user", "content": json.dumps(intent, ensure_ascii=False)},
                 ],
                 temperature=0.2,
+                **timeout_kwargs,
             )
+            self.last_candidate_payload = payload
             return WorldSpec.model_validate(payload)
         except Exception:
             return None
@@ -356,16 +378,102 @@ class WorldSpecGenerator:
 class WorldSpecRepairer:
     def repair(self, candidate: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
         fixed = json.loads(json.dumps(candidate, ensure_ascii=False))
+        sample = sample_world_spec("cultivation").model_dump(mode="json")
+        self._repair_scale(fixed, sample)
         locations = {item["id"] for item in fixed.get("locations", [])}
         if fixed.get("player_start", {}).get("location_id") not in locations and fixed.get("locations"):
             fixed.setdefault("player_start", {})["location_id"] = fixed["locations"][0]["id"]
+        starting_area = fixed.get("player_start", {}).get("location_id") or fixed.get("starting_area")
+        if fixed.get("starting_area") not in locations and starting_area in locations:
+            fixed["starting_area"] = starting_area
+        self._repair_disconnected_locations(fixed)
+        locations = {item["id"] for item in fixed.get("locations", [])}
+        factions = {item["id"] for item in fixed.get("factions", [])}
+        characters = {item["id"] for item in fixed.get("characters", [])}
+        items = {item["id"] for item in fixed.get("items", [])}
+        entities = {"player"} | locations | factions | characters | items | {item["id"] for item in fixed.get("initial_tensions", [])}
+        for character in fixed.get("characters", []):
+            if character.get("start_location") not in locations:
+                character["start_location"] = fixed.get("starting_area") or next(iter(locations), "")
+            if character.get("faction_id") not in factions:
+                character["faction_id"] = next(iter(factions), None)
+            if not character.get("goals"):
+                character["goals"] = [{"goal_id": f"{character['id']}_stay_useful", "priority": 0.5, "risk_tolerance": 0.3}]
+        for item in fixed.get("items", []):
+            if not item.get("owner_id") and not item.get("location_id"):
+                item["owner_id"] = "player"
+            if item.get("owner_id") and item["owner_id"] not in entities:
+                item["owner_id"] = "player"
+            if item.get("location_id") and item["location_id"] not in locations:
+                item["location_id"] = fixed.get("starting_area") or next(iter(locations), "")
+        for faction in fixed.get("factions", []):
+            faction["relations"] = [relation for relation in faction.get("relations", []) if relation.get("target") in factions]
         action_ids = {item["action_id"] for item in fixed.get("action_templates", [])}
+        for template in fixed.get("action_templates", []):
+            template["preconditions"] = [
+                item if item.get("type") in SUPPORTED_PREDICATES else {"type": "scope_allowed", "scope": "canonical"}
+                for item in template.get("preconditions", [])
+            ]
+            template["effects"] = [
+                item if item.get("type") in SUPPORTED_EFFECTS else {"type": "add_memory", "owner": "$actor", "memory_text": "行动被修复为只记录记忆。", "truth_scope": "npc"}
+                for item in template.get("effects", [])
+            ]
         for tension in fixed.get("initial_tensions", []):
+            tension["affected_entities"] = [item for item in tension.get("affected_entities", []) if item in entities] or ["player"]
             tension["suggested_actions"] = [item for item in tension.get("suggested_actions", []) if item in action_ids]
             if not tension.get("evidence"):
                 first = tension.get("affected_entities", ["player"])[0]
                 tension["evidence"] = [{"type": "state", "entity": first, "attr": "status", "value": "unresolved"}]
+        tensions = {item["id"] for item in fixed.get("initial_tensions", [])}
+        for quest in fixed.get("initial_quests", []):
+            if quest.get("issuer_id") not in characters:
+                quest["issuer_id"] = next(iter(characters), "")
+            if quest.get("tension_id") not in tensions:
+                quest["tension_id"] = next(iter(tensions), "")
+            if not quest.get("objectives"):
+                target = next(iter(locations or entities), "player")
+                quest["objectives"] = [{"type": "visit_location", "target": target}]
+            else:
+                for objective in quest["objectives"]:
+                    if objective.get("target") not in entities:
+                        objective["target"] = fixed.get("starting_area") or "player"
+            if not quest.get("evidence"):
+                quest["evidence"] = [{"tension_id": quest.get("tension_id", "")}]
         return fixed
+
+    def _repair_disconnected_locations(self, fixed: dict[str, Any]) -> None:
+        locations = fixed.get("locations", [])
+        if not locations:
+            return
+        start = fixed.get("player_start", {}).get("location_id") or locations[0]["id"]
+        reachable = _reachable_locations_from_dicts(start, locations)
+        for location in locations:
+            if location["id"] == start or location["id"] in reachable:
+                continue
+            location.setdefault("connects_to", []).append(start)
+
+    def _repair_scale(self, fixed: dict[str, Any], sample: dict[str, Any]) -> None:
+        limits = {
+            "locations": (6, 10),
+            "characters": (5, 8),
+            "items": (8, 15),
+            "factions": (2, 4),
+            "action_templates": (8, 15),
+            "initial_tensions": (3, 5),
+            "initial_quests": (2, 4),
+        }
+        for key, (minimum, maximum) in limits.items():
+            current = fixed.setdefault(key, [])
+            seen = {item.get("id") or item.get("action_id") for item in current}
+            for item in sample.get(key, []):
+                item_key = item.get("id") or item.get("action_id")
+                if len(current) >= minimum:
+                    break
+                if item_key not in seen:
+                    current.append(json.loads(json.dumps(item, ensure_ascii=False)))
+                    seen.add(item_key)
+            if len(current) > maximum:
+                del current[maximum:]
 
 
 def sample_world_spec(genre: str = "cultivation", idea: str = "") -> WorldSpec:
@@ -382,7 +490,7 @@ def _base_actions() -> list[dict[str, Any]]:
             "action_id": "move_to_location",
             "label_template": "前往{target}",
             "target_selector": {"entity_type": "Location", "connected_to_actor": True},
-            "preconditions": [{"type": "connected_location", "actor": "$actor", "target": "$target"}],
+            "preconditions": [{"type": "connected_location", "actor": "$actor", "target": "$target"}, {"type": "edge_unblocked", "actor": "$actor", "target": "$target"}],
             "effects": [{"type": "move_entity", "entity": "$actor", "to": "$target"}],
             "risk": "low",
             "reason": "目标地点与当前位置相连。",
@@ -455,7 +563,7 @@ def _base_actions() -> list[dict[str, Any]]:
             "action_id": "patrol",
             "label_template": "{target}巡逻",
             "target_selector": {"entity_type": "Location", "connected_to_actor": True},
-            "preconditions": [{"type": "connected_location", "actor": "$actor", "target": "$target"}],
+            "preconditions": [{"type": "connected_location", "actor": "$actor", "target": "$target"}, {"type": "edge_unblocked", "actor": "$actor", "target": "$target"}],
             "effects": [{"type": "move_entity", "entity": "$actor", "to": "$target"}],
             "risk": "low",
             "reason": "NPC 可在相邻地点巡逻。",
@@ -475,7 +583,7 @@ def _base_actions() -> list[dict[str, Any]]:
 def _cultivation_spec(idea: str) -> WorldSpec:
     data = {
         "world_id": _world_id("demo_cultivation_town", idea),
-        "title": "青木镇外门风波",
+        "title": _derive_title(idea, "cultivation") if idea else "青木镇外门风波",
         "genre": "cultivation",
         "theme": idea or "外门弟子成长与后山异常",
         "starting_area": "town_gate",
@@ -541,14 +649,14 @@ def _cultivation_spec(idea: str) -> WorldSpec:
 def _ocean_spec(idea: str) -> WorldSpec:
     spec = _cultivation_spec(idea)
     data = spec.model_dump(mode="json")
-    data.update({"world_id": _world_id("demo_tide_islands", idea), "title": "潮汐群岛失衡", "genre": "ocean", "theme": idea or "海岛贸易与潮汐异常"})
+    data.update({"world_id": _world_id("demo_tide_islands", idea), "title": _derive_title(idea, "ocean") if idea else "潮汐群岛失衡", "genre": "ocean", "theme": idea or "海岛贸易与潮汐异常"})
     return WorldSpec.model_validate(data)
 
 
 def _village_spec(idea: str) -> WorldSpec:
     spec = _cultivation_spec(idea)
     data = spec.model_dump(mode="json")
-    data.update({"world_id": _world_id("demo_border_village", idea), "title": "边村铁门风波", "genre": "village", "theme": idea or "边境村庄的信任与粮食矛盾"})
+    data.update({"world_id": _world_id("demo_border_village", idea), "title": _derive_title(idea, "village") if idea else "边村铁门风波", "genre": "village", "theme": idea or "边境村庄的信任与粮食矛盾"})
     return WorldSpec.model_validate(data)
 
 
@@ -564,9 +672,25 @@ def _world_id(prefix: str, idea: str) -> str:
     if not idea:
         return prefix
     slug = re.sub(r"[^a-zA-Z0-9_]+", "_", idea.lower()).strip("_")[:16]
+    digest = hashlib.sha1(idea.encode("utf-8")).hexdigest()[:8]
     if slug:
-        return f"{prefix}_{hashlib.sha1(idea.encode('utf-8')).hexdigest()[:8]}"
-    return prefix
+        return f"{prefix}_{slug}_{digest}"
+    return f"{prefix}_{digest}"
+
+
+def _derive_title(idea: str, genre: str) -> str:
+    text = idea.strip(" 。.!?？")
+    if any(word in text for word in ["青楼", "妓院", "花楼"]):
+        return "花楼旧梦"
+    if any(word in text for word in ["修仙", "外门", "宗门", "妖兽"]):
+        return "青木镇外门风波"
+    if any(word in text for word in ["海", "海洋", "岛", "船"]):
+        return "潮汐群岛失衡"
+    if text:
+        compact = text.replace("我想玩一个", "").replace("我想玩", "").replace("玩家", "").strip(" ，,")
+        if compact:
+            return compact[:12]
+    return "边村铁门风波" if genre == "village" else "小世界风波"
 
 
 def _check_unique(issues: list[ValidationIssue], path: str, values: list[str], label: str) -> None:
@@ -584,6 +708,22 @@ def _check_range(issues: list[ValidationIssue], path: str, value: int, minimum: 
 
 def _reachable_locations(start: str, locations: list[LocationSpec]) -> set[str]:
     graph: dict[str, set[str]] = {item.id: set(item.connects_to) for item in locations}
+    for source, targets in list(graph.items()):
+        for target in targets:
+            graph.setdefault(target, set()).add(source)
+    visited: set[str] = set()
+    stack = [start]
+    while stack:
+        item = stack.pop()
+        if item in visited:
+            continue
+        visited.add(item)
+        stack.extend(sorted(graph.get(item, set()) - visited))
+    return visited
+
+
+def _reachable_locations_from_dicts(start: str, locations: list[dict[str, Any]]) -> set[str]:
+    graph: dict[str, set[str]] = {item["id"]: set(item.get("connects_to", [])) for item in locations}
     for source, targets in list(graph.items()):
         for target in targets:
             graph.setdefault(target, set()).add(source)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 from threading import RLock
@@ -55,7 +57,7 @@ class GameWorldService:
             row = self.conn.execute("SELECT * FROM worlds WHERE id = ?", (world_id,)).fetchone()
             if row is None:
                 raise KeyError(world_id)
-            return {"id": row["id"], "name": row["name"], "description": row["description"], "created_at": row["created_at"]}
+            return {"id": row["id"], "name": row["name"], "description": row["description"], "runtime_mode": row["runtime_mode"], "created_at": row["created_at"]}
 
     def state(self, world_id: str) -> dict[str, dict[str, Any]]:
         with self._lock:
@@ -236,11 +238,32 @@ class GameWorldService:
                     """,
                     (f"src_worldidea_{spec.spec_hash()[:16]}", spec.world_id, idea, utc_now()),
                 )
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO source_texts(id, world_id, source_type, text, turn_id, created_at)
+                    VALUES (?, ?, 'worldspec_candidate', ?, NULL, ?)
+                    """,
+                    (
+                        f"src_worldspec_{spec.spec_hash()[:16]}",
+                        spec.world_id,
+                        json.dumps(
+                            {
+                                "source": generator.last_source,
+                                "candidate": generator.last_candidate_payload or spec.model_dump(mode="json"),
+                                "validation_report": report,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        utc_now(),
+                    ),
+                )
                 status = "validated" if report["valid"] else "rejected"
                 spec_id = WorldSpecRepository(self.conn).save(spec, status, report)
             return {
                 "world_spec_id": spec_id,
                 "world_id": spec.world_id,
+                "source": generator.last_source,
                 "spec": spec.model_dump(mode="json"),
                 "validation_report": report,
                 "repair_attempts": attempts,
@@ -301,22 +324,43 @@ class GameWorldService:
             validation = spec["validation_report"]
             quests = self.quests(world_id)
             quest_traceability = [bool(quest.get("tension_id") and quest.get("evidence")) for quest in quests]
+            before_replay_hash = _world_state_hash(self.conn, world_id)
             replay = self.replay(world_id)
+            after_replay_hash = _world_state_hash(self.conn, world_id)
             rebuild = self.rebuild_projectors(world_id)
-            affordances = self.affordances(world_id)
+            kuzu_graph = self.kuzu_graph(world_id)
+            sqlite_graph = self.graph(world_id)
+            active_sqlite_edges = [edge for edge in sqlite_graph["edges"] if edge["valid_to_turn"] is None]
+            sqlite_node_ids = {node["id"] for node in sqlite_graph["nodes"]}
+            kuzu_node_ids = {node["id"] for node in kuzu_graph["nodes"]}
+            kuzu_consistency_checks = [
+                len(kuzu_graph["nodes"]) == len(sqlite_graph["nodes"]),
+                len(kuzu_graph["edges"]) == len(active_sqlite_edges),
+                sqlite_node_ids.issubset(kuzu_node_ids),
+            ]
+            invalid_action_rate = _measure_invalid_action_rejection_rate(self.conn, world_id)
+            chroma_scope_accuracy, chroma_scope_details = _measure_chroma_scope_accuracy(self, world_id)
+            turns_playable = _measure_turns_playable(self, world_id, 30)
+            canonical_contamination_rate = _measure_canonical_contamination_rate(self.conn, world_id)
             return {
                 "world_id": world_id,
                 "worldspec_valid_rate": 1.0 if validation.get("valid") else 0.0,
                 "repair_success_rate": 1.0 if validation.get("valid") else 0.0,
-                "bootstrap_replay_equivalence": 1.0 if replay["state"] else 0.0,
-                "kuzu_rebuild_consistency": 1.0 if rebuild["projectors"] else 0.0,
-                "chroma_scoped_retrieval_accuracy": 1.0,
-                "turns_playable": 30 if len(affordances) >= 5 else 0,
-                "invalid_action_rate": 0.0,
-                "npc_privileged_knowledge_rate": 0.0,
+                "bootstrap_replay_equivalence": 1.0 if before_replay_hash == after_replay_hash and bool(replay["state"]) else 0.0,
+                "kuzu_rebuild_consistency": sum(1 for item in kuzu_consistency_checks if item) / len(kuzu_consistency_checks),
+                "chroma_scoped_retrieval_accuracy": chroma_scope_accuracy,
+                "turns_playable": turns_playable,
+                "invalid_action_rate": 1.0 - invalid_action_rate,
+                "npc_privileged_knowledge_rate": 1.0 - chroma_scope_accuracy,
                 "quest_traceability_rate": sum(1 for item in quest_traceability if item) / len(quest_traceability) if quest_traceability else 0.0,
-                "canonical_contamination_rate": 0.0,
-                "affordance_count": len(affordances),
+                "canonical_contamination_rate": canonical_contamination_rate,
+                "affordance_count": len(self.affordances(world_id)),
+                "details": {
+                    "state_hash_before_replay": before_replay_hash,
+                    "state_hash_after_replay": after_replay_hash,
+                    "kuzu_projectors": rebuild["projectors"],
+                    "chroma_scope": chroma_scope_details,
+                },
             }
 
     def validate_quest(self, world_id: str, quest: dict[str, Any]) -> dict[str, Any]:
@@ -333,7 +377,10 @@ class GameWorldService:
                 turn = self.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
                 state_before = WorldGraph(self.conn).state(world_id)
                 affordances_before = AffordanceEngine(self.conn).list_for_player(world_id)
-                candidate = self.action_parser.parse(player_input, state_before, affordances_before)
+                runtime_mode = _runtime_mode(self.conn, world_id)
+                candidate = self.action_parser.parse(player_input, state_before, affordances_before, require_current_affordance=runtime_mode == "template_only")
+                if candidate is None and runtime_mode == "template_only":
+                    candidate = _match_current_affordance(player_input, affordances_before)
                 result = RuleEngine(self.conn).resolve_turn(
                     world_id,
                     turn_id,
@@ -486,3 +533,151 @@ def _dialogue_memory_text(question: str, supporting_memory_ids: list[str], limit
     if len(text) <= limit:
         return text
     return f"{text[: limit - 1]}…"
+
+
+def _world_state_hash(conn: sqlite3.Connection, world_id: str) -> str:
+    graph = WorldGraph(conn).graph(world_id)
+    normalized_graph = {
+        "nodes": [
+            {key: value for key, value in node.items() if key not in {"source_event_id"}}
+            for node in graph["nodes"]
+        ],
+        "edges": [
+            {key: value for key, value in edge.items() if key not in {"id", "source_event_id"}}
+            for edge in graph["edges"]
+        ],
+    }
+    memories = sorted(
+        [
+        {key: value for key, value in memory.items() if key not in {"id", "source_event_id", "last_recalled_turn"}}
+        for memory in WorldGraph(conn).memories(world_id)
+        ],
+        key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, default=str),
+    )
+    payload = {
+        "state": WorldGraph(conn).state(world_id),
+        "graph": normalized_graph,
+        "memories": memories,
+        "action_templates": [
+            {
+                "action_id": row["action_id"],
+                "target_id": row["target_id"],
+                "target_selector": json.loads(row["target_selector_json"]),
+                "arg_schema": json.loads(row["arg_schema_json"]),
+                "preconditions": json.loads(row["preconditions_json"]),
+                "effects": json.loads(row["effects_json"]),
+                "enabled": row["enabled"],
+            }
+            for row in conn.execute(
+                "SELECT * FROM action_templates WHERE world_id = ? ORDER BY action_id",
+                (world_id,),
+            ).fetchall()
+        ],
+    }
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _measure_invalid_action_rejection_rate(conn: sqlite3.Connection, world_id: str) -> float:
+    log = EventLog(conn)
+    checks: list[bool] = []
+    invalid_cases = [
+        ("invalid_missing_template", "nonexistent_worldspec_action", None),
+        ("invalid_same_location", "talk_to", "herb_master"),
+        ("invalid_resource_or_location", "trade", "herb_master"),
+    ]
+    with transaction(conn):
+        for label, action_id, target_id in invalid_cases:
+            turn_id = log.create_turn(world_id, f"evaluation:{label}")
+            turn = conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+            result = RuleEngine(conn).resolve_turn(
+                world_id,
+                turn_id,
+                turn["turn_index"],
+                label,
+                action_id=action_id,
+                target_id=target_id,
+                extractor="worldgen_evaluation",
+                confidence=1.0,
+            )
+            checks.append(not result.accepted)
+    return sum(1 for item in checks if item) / len(checks) if checks else 0.0
+
+
+def _measure_chroma_scope_accuracy(service: GameWorldService, world_id: str) -> tuple[float, dict[str, Any]]:
+    graph = service.graph(world_id)
+    characters = [node["id"] for node in graph["nodes"] if node["entity_type"] == "Character" and node["id"] != "player"]
+    if len(characters) < 2:
+        return 0.0, {"reason": "not_enough_npcs"}
+    owner_a, owner_b = characters[:2]
+    nonce_a = f"scope_probe_alpha_{world_id}"
+    nonce_b = f"scope_probe_beta_{world_id}"
+    log = EventLog(service.conn)
+    projector = StateProjector(service.conn)
+    with transaction(service.conn):
+        turn_id = log.create_turn(world_id, "evaluation:chroma_scope_probe")
+        turn = service.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+        for owner_id, text in [(owner_a, nonce_a), (owner_b, nonce_b)]:
+            event = log.append(
+                world_id,
+                turn_id,
+                turn["turn_index"],
+                "ADD_MEMORY",
+                "system",
+                {"owner_id": owner_id, "memory_text": text, "truth_scope": "npc", "scope_key": owner_id, "salience": 0.5, "confidence": 1.0},
+                participants=[owner_id],
+                evidence_refs=[{"source_id": turn_id, "source_type": "worldgen_evaluation", "extractor": "scope_probe", "confidence": 1.0}],
+            )
+            projector.apply_event(event)
+    service.rebuild_projectors(world_id)
+    hits_a_for_a = service.search_memories(world_id, owner_a, nonce_a, 5)
+    hits_a_for_b = service.search_memories(world_id, owner_a, nonce_b, 5)
+    own_hit = any(nonce_a in hit["text"] for hit in hits_a_for_a)
+    leak_blocked = not any(nonce_b in hit["text"] or hit["metadata"].get("owner_id") == owner_b for hit in hits_a_for_b)
+    return (
+        (1.0 if own_hit else 0.0) * 0.5 + (1.0 if leak_blocked else 0.0) * 0.5,
+        {"owner_a": owner_a, "owner_b": owner_b, "own_hit": own_hit, "leak_blocked": leak_blocked},
+    )
+
+
+def _measure_canonical_contamination_rate(conn: sqlite3.Connection, world_id: str) -> float:
+    contaminated = 0
+    checked = 0
+    for event in EventLog(conn).list(world_id):
+        if event.event_type != "ADD_MEMORY":
+            continue
+        truth_scope = event.payload.get("truth_scope", "npc")
+        if truth_scope not in {"rumor", "candidate", "npc", "faction"}:
+            continue
+        checked += 1
+        if any(delta.scope == "canonical" for delta in event.state_deltas):
+            contaminated += 1
+    return contaminated / checked if checked else 0.0
+
+
+def _measure_turns_playable(service: GameWorldService, world_id: str, max_ticks: int) -> int:
+    playable = 0
+    for _ in range(max_ticks):
+        affordances = service.affordances(world_id)
+        result = service.tick_world(world_id)
+        if affordances or any(item.get("acted") for item in result.get("results", [])):
+            playable += 1
+            continue
+        break
+    return playable
+
+
+def _runtime_mode(conn: sqlite3.Connection, world_id: str) -> str:
+    row = conn.execute("SELECT runtime_mode FROM worlds WHERE id = ?", (world_id,)).fetchone()
+    return row["runtime_mode"] if row and row["runtime_mode"] else "legacy_demo"
+
+
+def _match_current_affordance(player_input: str, affordances: list[dict[str, Any]]) -> Any | None:
+    from .llm import ActionCandidate
+
+    normalized = player_input.strip()
+    for affordance in affordances:
+        label = affordance.get("label", "")
+        if normalized == label or (label and label in normalized):
+            return ActionCandidate(action_id=affordance["action_id"], target_id=affordance.get("target_id") or None, confidence=0.8, reason="matched_current_affordance")
+    return None

@@ -75,7 +75,7 @@ def seed_village_world(conn: sqlite3.Connection, world_id: str = DEMO_VILLAGE_WO
             0,
             "CONNECT_LOCATION",
             "system",
-            {"from": from_location, "to": to_location},
+            {"from": from_location, "to": to_location, "properties": _connection_properties(from_location, to_location)},
             participants=[from_location, to_location],
             evidence_refs=[_seed_evidence()],
         )
@@ -147,7 +147,7 @@ def seed_village_location_connections(conn: sqlite3.Connection, world_id: str = 
             turn["turn_index"],
             "CONNECT_LOCATION",
             "system",
-            {"from": from_location, "to": to_location},
+            {"from": from_location, "to": to_location, "properties": _connection_properties(from_location, to_location)},
             participants=[from_location, to_location],
             evidence_refs=[_seed_evidence()],
         )
@@ -239,6 +239,12 @@ def _location_connections() -> list[tuple[str, str]]:
     ]
 
 
+def _connection_properties(from_location: str, to_location: str) -> dict[str, Any]:
+    if {from_location, to_location} == {"village_gate", "inner_city"}:
+        return {"requires_state": {"entity": "iron_gate", "attr": "open", "value": True}}
+    return {}
+
+
 def _initial_holders() -> list[tuple[str, str]]:
     return [
         ("pass_token", "player"),
@@ -295,7 +301,13 @@ def _action_templates() -> list[ActionTemplate]:
                     "actor": "$actor",
                     "target": "$target",
                     "reason": "目标地点无法从当前位置直接到达，或路径被封锁。",
-                }
+                },
+                {
+                    "type": "edge_unblocked",
+                    "actor": "$actor",
+                    "target": "$target",
+                    "reason": "路径被门禁或状态要求封锁。",
+                },
             ],
             effects=[{"type": "move_entity", "entity": "$actor", "to": "$target", "actor": "$actor"}],
         ),

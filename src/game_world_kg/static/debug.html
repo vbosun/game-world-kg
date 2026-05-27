@@ -91,9 +91,32 @@
       background: #fff;
       color: var(--accent);
     }
+    button.ghost {
+      background: #f8fafc;
+      color: var(--ink);
+      border-color: var(--line);
+    }
+    button.small {
+      padding: 5px 8px;
+      font-size: 12px;
+    }
     .stack { display: grid; gap: 12px; }
     .row { display: flex; gap: 8px; align-items: center; }
     .row > * { flex: 1; }
+    .wrap { flex-wrap: wrap; }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .toolbar button { flex: 0 0 auto; }
+    .action-card {
+      display: grid;
+      gap: 9px;
+    }
+    .action-card button {
+      justify-self: start;
+    }
     .tabs {
       display: flex;
       flex-wrap: wrap;
@@ -200,7 +223,7 @@
 <body>
   <header>
     <h1>Game World KG Debug</h1>
-    <div class="row" style="max-width: 420px;">
+    <div class="row" style="max-width: 560px;">
       <input id="worldId" value="demo_gate" aria-label="world id">
       <button id="refreshBtn" type="button">刷新</button>
     </div>
@@ -208,9 +231,25 @@
   <main>
     <aside class="stack">
       <div class="card stack">
+        <h2>世界</h2>
+        <div class="toolbar">
+          <button class="ghost small" type="button" data-world="demo_gate">城门</button>
+          <button class="ghost small" type="button" data-world="demo_village">村庄</button>
+        </div>
+        <label for="worldIdea">WorldSpec 想法</label>
+        <textarea id="worldIdea">我想玩一个修仙小镇，主角刚入外门，后山妖兽异常。</textarea>
+        <div class="row">
+          <button id="generateWorldBtn" type="button">生成</button>
+          <button id="bootstrapWorldBtn" class="secondary" type="button">启动</button>
+        </div>
+      </div>
+      <div class="card stack">
         <h2>提交回合</h2>
         <textarea id="turnInput">我把通行令递给守卫，问他能不能放我进去</textarea>
-        <button id="turnBtn" type="button">提交</button>
+        <div class="row">
+          <button id="turnBtn" type="button">提交</button>
+          <button id="tickBtn" class="secondary" type="button">NPC Tick</button>
+        </div>
       </div>
       <div class="card stack">
         <h2>NPC 对话</h2>
@@ -247,9 +286,10 @@
     </section>
   </main>
   <script>
-    const views = ["overview", "dialogue", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "tensions", "quests", "explain", "evaluation", "raw"];
+    const views = ["overview", "worldspec", "dialogue", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "tensions", "quests", "explain", "evaluation", "raw"];
     const labels = {
       overview: "概览",
+      worldspec: "WorldSpec",
       dialogue: "Dialogue",
       state: "State",
       events: "Events",
@@ -286,10 +326,18 @@
       return response.json();
     }
 
+    async function optionalApi(path, fallback = null) {
+      try {
+        return await api(path);
+      } catch (_err) {
+        return fallback;
+      }
+    }
+
     async function refresh() {
       const id = worldId();
       setStatus("刷新中...");
-      const [state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation] = await Promise.all([
+      const [state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation, worldspec, worldgenEvaluation, foreground] = await Promise.all([
         api(`/worlds/${id}/state`),
         api(`/worlds/${id}/events`),
         api(`/worlds/${id}/graph`),
@@ -303,10 +351,43 @@
         api(`/worlds/${id}/affordances`),
         api(`/worlds/${id}/tensions`),
         api(`/worlds/${id}/quests`),
-        api(`/evaluation`)
+        api(`/evaluation`),
+        optionalApi(`/worlds/${id}/worldspec`),
+        optionalApi(`/worlds/${id}/evaluation/worldgen`),
+        optionalApi(`/worlds/${id}/drama/foreground`)
       ]);
-      Object.assign(data, { state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation });
+      Object.assign(data, { state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation, worldspec, worldgenEvaluation, foreground });
       setStatus(`已刷新 ${new Date().toLocaleTimeString()}`, "ok");
+      render();
+    }
+
+    async function generateWorldSpec() {
+      const idea = document.getElementById("worldIdea").value;
+      setStatus("生成 WorldSpec 中...");
+      data.generatedWorldSpec = await api("/v1/worldspec/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idea, repair_attempts: 2 })
+      });
+      document.getElementById("worldId").value = data.generatedWorldSpec.world_id;
+      currentView = "worldspec";
+      setStatus(data.generatedWorldSpec.validation_report?.valid ? "WorldSpec 已生成并通过校验" : "WorldSpec 已生成但未通过校验", data.generatedWorldSpec.validation_report?.valid ? "ok" : "warn");
+      render();
+    }
+
+    async function bootstrapGeneratedWorld() {
+      const spec = data.generatedWorldSpec?.spec || data.worldspec?.spec;
+      if (!spec) throw new Error("先生成 WorldSpec");
+      setStatus("启动 WorldSpec 世界中...");
+      data.lastBootstrap = await api("/v1/worldspec/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spec })
+      });
+      document.getElementById("worldId").value = data.lastBootstrap.world_id || spec.world_id;
+      await refresh();
+      currentView = "overview";
+      setStatus("WorldSpec 世界已启动", "ok");
       render();
     }
 
@@ -321,6 +402,23 @@
       });
       await refresh();
       currentView = "overview";
+      render();
+    }
+
+    async function submitAffordance(index) {
+      const action = (data.affordances || [])[index];
+      if (!action) return;
+      document.getElementById("turnInput").value = action.label;
+      await submitTurn();
+    }
+
+    async function tickWorld() {
+      const id = worldId();
+      setStatus("NPC tick 中...");
+      data.lastTick = await api(`/worlds/${id}/tick`, { method: "POST" });
+      await refresh();
+      currentView = "overview";
+      setStatus("NPC tick 完成", "ok");
       render();
     }
 
@@ -406,6 +504,7 @@
       renderTabs();
       const content = document.getElementById("content");
       if (currentView === "overview") content.innerHTML = overview();
+      if (currentView === "worldspec") content.innerHTML = worldspecView();
       if (currentView === "dialogue") content.innerHTML = dialogueView();
       if (currentView === "state") content.innerHTML = stateView();
       if (currentView === "events") content.innerHTML = eventsView();
@@ -425,6 +524,8 @@
       const state = data.state || {};
       const lastTurn = data.lastTurn ? card("Last Turn", `<pre>${escapeHtml(JSON.stringify(data.lastTurn, null, 2))}</pre>`) : "";
       const lastDialogue = data.lastDialogue ? card("Last Dialogue", `<pre>${escapeHtml(JSON.stringify(data.lastDialogue, null, 2))}</pre>`) : "";
+      const lastTick = data.lastTick ? card("Last NPC Tick", `<pre>${escapeHtml(JSON.stringify(data.lastTick, null, 2))}</pre>`) : "";
+      const foreground = data.foreground?.foreground_tensions?.length ? card("前台局势", (data.foreground.foreground_tensions || []).map(t => `<div class="pill">${escapeHtml(t.tension_id || t.id)}</div>`).join("")) : "";
       return `
         <div class="grid">
           ${metric("玩家位置", state.player?.location || "-")}
@@ -434,10 +535,19 @@
           ${metric("记忆数", (data.memories || []).length)}
           ${metric("矛盾数", (data.tensions || []).length)}
           ${metric("任务数", (data.quests || []).length)}
+          ${metric("可行动作", (data.affordances || []).length)}
         </div>
         <div style="height:12px"></div>
-        <div class="grid">${lastTurn}${lastDialogue}</div>
+        <div class="grid">${foreground}${lastTurn}${lastTick}${lastDialogue}</div>
       `;
+    }
+
+    function worldspecView() {
+      const generated = data.generatedWorldSpec ? card("Generated Candidate", `<pre>${escapeHtml(JSON.stringify(data.generatedWorldSpec, null, 2))}</pre>`) : "";
+      const current = data.worldspec ? card("Current WorldSpec", `<pre>${escapeHtml(JSON.stringify(data.worldspec, null, 2))}</pre>`) : card("Current WorldSpec", `<p class="muted">当前世界没有保存的 WorldSpec。可以在左侧输入想法并生成。</p>`);
+      const bootstrap = data.lastBootstrap ? card("Last Bootstrap", `<pre>${escapeHtml(JSON.stringify(data.lastBootstrap, null, 2))}</pre>`) : "";
+      const worldgen = data.worldgenEvaluation ? card("Worldgen Evaluation", `<pre>${escapeHtml(JSON.stringify(data.worldgenEvaluation, null, 2))}</pre>`) : "";
+      return `<div class="grid">${current}${generated}${bootstrap}${worldgen}</div>`;
     }
 
     function stateView() {
@@ -515,10 +625,16 @@
     }
 
     function affordancesView() {
-      return `<div class="grid">${(data.affordances || []).map(a => card(a.label, `
-        <div class="pill">${escapeHtml(a.action_id)}</div>
-        <div class="pill">${escapeHtml(a.risk)}</div>
-        <p class="muted">${escapeHtml(a.reason)}</p>
+      return `<div class="grid">${(data.affordances || []).map((a, index) => card(a.label, `
+        <div class="action-card">
+          <div>
+            <div class="pill">${escapeHtml(a.action_id)}</div>
+            <div class="pill">${escapeHtml(a.risk)}</div>
+            ${a.target_id ? `<div class="pill">${escapeHtml(a.target_id)}</div>` : ""}
+          </div>
+          <p class="muted">${escapeHtml(a.reason)}</p>
+          <button class="small" type="button" onclick="submitAffordance(${index}).catch(err => setStatus(err.message, 'bad'))">执行</button>
+        </div>
       `)).join("")}</div>`;
     }
 
@@ -547,10 +663,13 @@
 
     function evaluationView() {
       const summary = data.evaluation?.summary || {};
+      const worldgen = data.worldgenEvaluation ? card("Worldgen", `<pre>${escapeHtml(JSON.stringify(data.worldgenEvaluation, null, 2))}</pre>`) : "";
       return `
         <div class="grid">
           ${Object.entries(summary).map(([key, value]) => metric(key, value, Number(value) === 0 ? "ok" : Number(value) === 1 ? "ok" : "" )).join("")}
         </div>
+        <div style="height:12px"></div>
+        ${worldgen}
         <div style="height:12px"></div>
         <pre>${escapeHtml(JSON.stringify(data.evaluation, null, 2))}</pre>
       `;
@@ -578,7 +697,16 @@
     }
 
     document.getElementById("refreshBtn").onclick = () => refresh().catch(err => setStatus(err.message, "bad"));
+    document.querySelectorAll("[data-world]").forEach(button => {
+      button.onclick = () => {
+        document.getElementById("worldId").value = button.dataset.world;
+        refresh().catch(err => setStatus(err.message, "bad"));
+      };
+    });
+    document.getElementById("generateWorldBtn").onclick = () => generateWorldSpec().catch(err => setStatus(err.message, "bad"));
+    document.getElementById("bootstrapWorldBtn").onclick = () => bootstrapGeneratedWorld().catch(err => setStatus(err.message, "bad"));
     document.getElementById("turnBtn").onclick = () => submitTurn().catch(err => setStatus(err.message, "bad"));
+    document.getElementById("tickBtn").onclick = () => tickWorld().catch(err => setStatus(err.message, "bad"));
     document.getElementById("npcBtn").onclick = () => askNpc().catch(err => setStatus(err.message, "bad"));
     document.getElementById("replayBtn").onclick = () => replay().catch(err => setStatus(err.message, "bad"));
     document.getElementById("explainBtn").onclick = () => explain().catch(err => setStatus(err.message, "bad"));

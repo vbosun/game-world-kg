@@ -124,9 +124,12 @@ class PredicateEvaluator:
             if not target:
                 return False
             current = self.state.get_state(world_id, actor, "location")
-            if target == "inner_city" and self.state.get_state(world_id, "iron_gate", "open") is not True:
-                return False
             return self._locations_connected(world_id, current, target)
+        if kind == "edge_unblocked":
+            actor = self._bind(predicate["actor"], bindings)
+            target = self._bind(predicate["target"], bindings)
+            current = self.state.get_state(world_id, actor, "location")
+            return self._edge_unblocked(world_id, current, target)
         if kind == "scope_allowed":
             return predicate.get("scope", "canonical") in {"canonical", "player", "npc", "faction", "rumor", "candidate", "rejected"}
         raise ValueError(f"unknown predicate type: {kind}")
@@ -157,6 +160,32 @@ class PredicateEvaluator:
             (world_id, current, target, target, current),
         ).fetchone()
         return row is not None
+
+    def _edge_unblocked(self, world_id: str, current: str | None, target: str) -> bool:
+        if current is None or not target:
+            return False
+        row = self.conn.execute(
+            """
+            SELECT properties_json FROM edges
+            WHERE world_id = ?
+              AND rel_type = 'CONNECTS'
+              AND valid_to_turn IS NULL
+              AND ((src_id = ? AND dst_id = ?) OR (src_id = ? AND dst_id = ?))
+            """,
+            (world_id, current, target, target, current),
+        ).fetchone()
+        if row is None:
+            return False
+        properties = from_json(row["properties_json"], {})
+        requirement = properties.get("requires_state") or properties.get("blocked_by")
+        if not requirement:
+            return True
+        entity = requirement.get("entity")
+        attr = requirement.get("attr")
+        expected = requirement.get("value", requirement.get("required"))
+        if not entity or not attr:
+            return True
+        return self.state.get_state(world_id, entity, attr, requirement.get("scope", "canonical")) == expected
 
 
 class EffectExecutor:
