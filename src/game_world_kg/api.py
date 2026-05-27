@@ -24,6 +24,12 @@ class TurnRequest(BaseModel):
     player_input: str
 
 
+class PlayTurnRequest(BaseModel):
+    player_input: str
+    selected_action_id: str | None = None
+    selected_target_id: str | None = None
+
+
 class ReplayRequest(BaseModel):
     to_turn: int | None = None
 
@@ -83,6 +89,34 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/worlds/{world_id}/affordances")
     def get_affordances(world_id: str) -> list[dict[str, Any]]:
         return _handle(lambda: service.affordances(world_id))
+
+    @app.get("/worlds/{world_id}/play/state")
+    def get_play_state(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.play_state(world_id))
+
+    @app.get("/worlds/{world_id}/play/scene")
+    def get_play_scene(world_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.play_scene(world_id))
+
+    @app.get("/worlds/{world_id}/play/affordances")
+    def get_play_affordances(world_id: str) -> list[dict[str, Any]]:
+        return _handle(lambda: service.play_affordances(world_id))
+
+    @app.post("/worlds/{world_id}/play/turn")
+    def post_play_turn(world_id: str, request: PlayTurnRequest) -> dict[str, Any]:
+        return _handle(lambda: service.play_turn(world_id, request.player_input, request.selected_action_id, request.selected_target_id))
+
+    @app.get("/worlds/{world_id}/play/quests")
+    def get_play_quests(world_id: str) -> list[dict[str, Any]]:
+        return _handle(lambda: service.play_quests(world_id))
+
+    @app.get("/worlds/{world_id}/play/tensions")
+    def get_play_tensions(world_id: str) -> list[dict[str, Any]]:
+        return _handle(lambda: service.play_tensions(world_id))
+
+    @app.get("/worlds/{world_id}/play/timeline")
+    def get_play_timeline(world_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        return _handle(lambda: service.play_timeline(world_id, limit))
 
     @app.get("/worlds/{world_id}/quests")
     def get_quests(world_id: str) -> list[dict[str, Any]]:

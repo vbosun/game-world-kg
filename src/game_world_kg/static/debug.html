@@ -139,6 +139,18 @@
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 12px;
     }
+    .play-layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.4fr) minmax(240px, 0.9fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .play-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
     .card {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -286,9 +298,10 @@
     </section>
   </main>
   <script>
-    const views = ["overview", "worldspec", "dialogue", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "tensions", "quests", "explain", "evaluation", "raw"];
+    const views = ["overview", "play", "worldspec", "dialogue", "state", "events", "graph", "kuzu", "chroma", "memories", "affordances", "tensions", "quests", "explain", "evaluation", "raw"];
     const labels = {
       overview: "概览",
+      play: "Play",
       worldspec: "WorldSpec",
       dialogue: "Dialogue",
       state: "State",
@@ -337,7 +350,7 @@
     async function refresh() {
       const id = worldId();
       setStatus("刷新中...");
-      const [state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation, worldspec, worldgenEvaluation, foreground] = await Promise.all([
+      const [state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation, worldspec, worldgenEvaluation, foreground, playState] = await Promise.all([
         api(`/worlds/${id}/state`),
         api(`/worlds/${id}/events`),
         api(`/worlds/${id}/graph`),
@@ -354,9 +367,10 @@
         api(`/evaluation`),
         optionalApi(`/worlds/${id}/worldspec`),
         optionalApi(`/worlds/${id}/evaluation/worldgen`),
-        optionalApi(`/worlds/${id}/drama/foreground`)
+        optionalApi(`/worlds/${id}/drama/foreground`),
+        optionalApi(`/worlds/${id}/play/state`)
       ]);
-      Object.assign(data, { state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation, worldspec, worldgenEvaluation, foreground });
+      Object.assign(data, { state, events, graph, kuzuGraph, projectionStatus, chromaEvidence, chromaMemories, memories, memoryOps, reviewQueue, affordances, tensions, quests, evaluation, worldspec, worldgenEvaluation, foreground, playState });
       setStatus(`已刷新 ${new Date().toLocaleTimeString()}`, "ok");
       render();
     }
@@ -410,6 +424,26 @@
       if (!action) return;
       document.getElementById("turnInput").value = action.label;
       await submitTurn();
+    }
+
+    async function submitPlayTurn(actionIndex = null) {
+      const id = worldId();
+      const input = document.getElementById("playInput")?.value || "";
+      const action = actionIndex === null ? null : (data.playState?.affordances || [])[actionIndex];
+      setStatus("提交 Play 回合中...");
+      data.lastPlayTurn = await api(`/worlds/${id}/play/turn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          player_input: input || action?.label || "",
+          selected_action_id: action?.action_id || null,
+          selected_target_id: action?.target_id || null
+        })
+      });
+      await refresh();
+      currentView = "play";
+      setStatus(data.lastPlayTurn.turn?.accepted ? "Play 回合完成" : "Play 回合被规则拦截", data.lastPlayTurn.turn?.accepted ? "ok" : "warn");
+      render();
     }
 
     async function tickWorld() {
@@ -504,6 +538,7 @@
       renderTabs();
       const content = document.getElementById("content");
       if (currentView === "overview") content.innerHTML = overview();
+      if (currentView === "play") content.innerHTML = playView();
       if (currentView === "worldspec") content.innerHTML = worldspecView();
       if (currentView === "dialogue") content.innerHTML = dialogueView();
       if (currentView === "state") content.innerHTML = stateView();
@@ -540,6 +575,43 @@
         <div style="height:12px"></div>
         <div class="grid">${foreground}${lastTurn}${lastTick}${lastDialogue}</div>
       `;
+    }
+
+    function playView() {
+      const play = data.playState || {};
+      const scene = play.scene || {};
+      const player = play.player || {};
+      const last = data.lastPlayTurn?.feedback || {};
+      const actions = (play.affordances || []).map((a, index) => `
+        <button class="secondary" type="button" onclick="submitPlayTurn(${index}).catch(err => setStatus(err.message, 'bad'))">
+          ${escapeHtml(a.label)}
+        </button>
+      `).join("");
+      const left = card("Scene", `
+        <h3>${escapeHtml(scene.location?.name || "-")}</h3>
+        <p>${escapeHtml(scene.summary || "")}</p>
+        <p class="muted">NPC: ${(scene.visible_npcs || []).map(n => escapeHtml(n.name)).join("、") || "-"}</p>
+        <p class="muted">去路: ${(scene.connections || []).map(n => escapeHtml(n.name)).join("、") || "-"}</p>
+      `);
+      const center = card("Turn", `
+        <p>${escapeHtml(last.narration || "选择一个行动，或输入一句会被绑定到当前合法行动的话。")}</p>
+        <div class="play-actions">${actions}</div>
+        <div style="height:10px"></div>
+        <textarea id="playInput" placeholder="自由输入，但必须能落到当前合法行动"></textarea>
+        <div style="height:8px"></div>
+        <button type="button" onclick="submitPlayTurn().catch(err => setStatus(err.message, 'bad'))">提交自由输入</button>
+      `);
+      const right = card("Player", `
+        <div class="pill">位置 ${escapeHtml(player.location || "-")}</div>
+        <div class="pill">线索 ${(player.known_clues || []).length}</div>
+        <div class="pill">权限 ${(player.permissions || []).length}</div>
+        <h3>任务</h3>
+        ${(play.quests || []).slice(0, 3).map(q => `<p><strong>${escapeHtml(q.title)}</strong><br><span class="muted">${escapeHtml(q.tension_reason || "")}</span></p>`).join("") || `<p class="muted">暂无任务</p>`}
+        <h3>关系</h3>
+        ${(play.relationships || []).slice(0, 4).map(r => `<p>${escapeHtml(r.name)} <span class="muted">${escapeHtml(JSON.stringify(r.attitudes))}</span></p>`).join("") || `<p class="muted">暂无可见变化</p>`}
+      `);
+      const feedback = data.lastPlayTurn ? card("Changes", `<pre>${escapeHtml(JSON.stringify(data.lastPlayTurn.changes, null, 2))}</pre>`) : "";
+      return `<div class="play-layout">${left}${center}${right}</div><div style="height:12px"></div>${feedback}`;
     }
 
     function worldspecView() {

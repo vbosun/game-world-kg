@@ -21,6 +21,7 @@ from .kuzu_store import KuzuStore
 from .llm import ActionParser, LLMClient, Narrator
 from .memory import MemoryAwareDialogue, MemoryGraph
 from .npc_planner import NPCPlanner
+from .playable_turn import PlayableTurnKernel
 from .projector import ChromaProjector, KuzuProjector, StateProjector
 from .quest import QuestGenerator, QuestValidator
 from .rules import RuleEngine
@@ -203,6 +204,39 @@ class GameWorldService:
         with self._lock:
             self._require_world(world_id)
             return AffordanceEngine(self.conn).list_for_player(world_id)
+
+    def play_state(self, world_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            return PlayableTurnKernel(self).play_state(world_id)
+
+    def play_scene(self, world_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            return PlayableTurnKernel(self).play_state(world_id)["scene"]
+
+    def play_affordances(self, world_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            return PlayableTurnKernel(self).play_affordances(world_id)
+
+    def play_turn(self, world_id: str, player_input: str, selected_action_id: str | None = None, selected_target_id: str | None = None) -> dict[str, Any]:
+        return PlayableTurnKernel(self).play_turn(world_id, player_input, selected_action_id=selected_action_id, selected_target_id=selected_target_id)
+
+    def play_quests(self, world_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            return PlayableTurnKernel(self).quest_journal(world_id)
+
+    def play_tensions(self, world_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            return PlayableTurnKernel(self).tension_journal(world_id)
+
+    def play_timeline(self, world_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            return PlayableTurnKernel(self).timeline(world_id, limit)
 
     def quests(self, world_id: str) -> list[dict[str, Any]]:
         with self._lock:
