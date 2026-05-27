@@ -23,6 +23,7 @@ def test_debug_panel_file_references_core_endpoints() -> None:
     assert "/worlds/${id}/tensions" in html
     assert "/worlds/${id}/play/state" in html
     assert "/worlds/${id}/play/turn" in html
+    assert "document.getElementById(\"worldId\").value = data.generatedWorldSpec.world_id" not in html
     assert "/worlds/${id}/projectors/status" in html
     assert "/worlds/${id}/explain/state/${entity}/${attr" in html
     assert "/evaluation" in html

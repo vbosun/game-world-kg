@@ -383,9 +383,8 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idea, repair_attempts: 2 })
       });
-      document.getElementById("worldId").value = data.generatedWorldSpec.world_id;
       currentView = "worldspec";
-      setStatus(data.generatedWorldSpec.validation_report?.valid ? "WorldSpec 已生成并通过校验" : "WorldSpec 已生成但未通过校验", data.generatedWorldSpec.validation_report?.valid ? "ok" : "warn");
+      setStatus(data.generatedWorldSpec.validation_report?.valid ? `WorldSpec 已生成并通过校验，点击启动后进入 ${data.generatedWorldSpec.world_id}` : "WorldSpec 已生成但未通过校验", data.generatedWorldSpec.validation_report?.valid ? "ok" : "warn");
       render();
     }
 

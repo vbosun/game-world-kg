@@ -654,9 +654,71 @@ def _ocean_spec(idea: str) -> WorldSpec:
 
 
 def _village_spec(idea: str) -> WorldSpec:
-    spec = _cultivation_spec(idea)
-    data = spec.model_dump(mode="json")
-    data.update({"world_id": _world_id("demo_border_village", idea), "title": _derive_title(idea, "village") if idea else "边村铁门风波", "genre": "village", "theme": idea or "边境村庄的信任与粮食矛盾"})
+    data = {
+        "world_id": _world_id("demo_border_village", idea),
+        "title": _derive_title(idea, "village") if idea else "边村铁门风波",
+        "genre": "village",
+        "theme": idea or "边境村庄的信任与粮食矛盾",
+        "starting_area": "village_gate",
+        "player_start": {"character_id": "player", "location_id": "village_gate"},
+        "locations": [
+            {"id": "village_gate", "stable_key": "village_gate", "name": "村口", "description": "通往村内的小门和守夜棚。", "location_type": "gate", "connects_to": ["village_square", "guard_room"], "tags": ["start"]},
+            {"id": "village_square", "stable_key": "village_square", "name": "村广场", "description": "村民聚集、交换消息和等待差事的地方。", "location_type": "square", "connects_to": ["village_gate", "tavern", "warehouse", "well"], "tags": ["social", "rumor"]},
+            {"id": "tavern", "stable_key": "tavern", "name": "酒馆", "description": "行商、脚夫和本地人混杂的消息场。", "location_type": "tavern", "connects_to": ["village_square", "market_stall"], "tags": ["rumor", "trade"]},
+            {"id": "warehouse", "stable_key": "warehouse", "name": "仓库", "description": "存放粮袋和账本，门锁让调查变得麻烦。", "location_type": "warehouse", "connects_to": ["village_square"], "tags": ["resource", "locked"]},
+            {"id": "well", "stable_key": "well", "name": "井边", "description": "旧井旁最容易听见半真半假的话。", "location_type": "well", "connects_to": ["village_square", "back_alley"], "tags": ["rumor"]},
+            {"id": "market_stall", "stable_key": "market_stall", "name": "市集摊位", "description": "小贩把粮价和通行消息挂在嘴边。", "location_type": "market", "connects_to": ["tavern"], "tags": ["trade"]},
+            {"id": "guard_room", "stable_key": "guard_room", "name": "守卫室", "description": "守卫在这里记录进出和处理纠纷。", "location_type": "guard_room", "connects_to": ["village_gate", "inner_gate"], "tags": ["authority"]},
+            {"id": "back_alley", "stable_key": "back_alley", "name": "后巷", "description": "绕开广场的小路，适合打听隐秘消息。", "location_type": "alley", "connects_to": ["well"], "tags": ["risk", "secret"]},
+            {"id": "inner_gate", "stable_key": "inner_gate", "name": "内门", "description": "进入村内要地的门，平时只对可信者开放。", "location_type": "gate", "connects_to": ["guard_room"], "tags": ["permission"]},
+        ],
+        "factions": [
+            {"id": "village_council", "stable_key": "village_council", "name": "村议会", "faction_type": "authority", "goals": ["maintain_order", "secure_grain"], "relations": [{"target": "traders", "relation": "depends_on", "value": 0.3}]},
+            {"id": "traders", "stable_key": "traders", "name": "行商脚夫", "faction_type": "trade", "goals": ["keep_routes_open", "profit"], "relations": [{"target": "village_council", "relation": "negotiates", "value": 0.4}]},
+            {"id": "townsfolk", "stable_key": "townsfolk", "name": "村民", "faction_type": "civilian", "goals": ["survive", "avoid_trouble"], "relations": [{"target": "village_council", "relation": "pressures", "value": 0.2}]},
+        ],
+        "characters": [
+            {"id": "guard_alos", "stable_key": "guard_alos", "name": "守卫阿洛斯", "role": "guard", "start_location": "village_gate", "faction_id": "village_council", "goals": [{"goal_id": "control_access", "priority": 0.8}], "personality": {"strict": 0.7}, "initial_beliefs": ["陌生人需要证明自己可信。"]},
+            {"id": "tavern_keeper", "stable_key": "tavern_keeper", "name": "酒馆老板米拉", "role": "innkeeper", "start_location": "tavern", "faction_id": "townsfolk", "goals": [{"goal_id": "collect_news", "priority": 0.7}], "personality": {"talkative": 0.8}, "initial_beliefs": ["最近粮价上涨不是单纯缺货。"]},
+            {"id": "merchant_borin", "stable_key": "merchant_borin", "name": "商人博林", "role": "merchant", "start_location": "market_stall", "faction_id": "traders", "goals": [{"goal_id": "move_grain", "priority": 0.8}], "personality": {"pragmatic": 0.7}, "initial_beliefs": ["仓库账本能解释粮袋去向。"]},
+            {"id": "village_chief", "stable_key": "village_chief", "name": "村长洛恩", "role": "chief", "start_location": "village_square", "faction_id": "village_council", "goals": [{"goal_id": "avoid_panic", "priority": 0.8}], "personality": {"cautious": 0.7}, "initial_beliefs": ["公开争吵会让村子失控。"]},
+            {"id": "warehouse_keeper", "stable_key": "warehouse_keeper", "name": "仓库管理员托马", "role": "keeper", "start_location": "warehouse", "faction_id": "village_council", "goals": [{"goal_id": "protect_warehouse", "priority": 0.8}], "personality": {"nervous": 0.6}, "initial_beliefs": ["仓库钥匙不能随便交出去。"]},
+            {"id": "suspicious_traveler", "stable_key": "suspicious_traveler", "name": "可疑旅人萨温", "role": "traveler", "start_location": "back_alley", "faction_id": "traders", "goals": [{"goal_id": "hide_route", "priority": 0.6}], "personality": {"secretive": 0.8}, "initial_beliefs": ["井边有人看见过夜里搬粮。"]},
+        ],
+        "items": [
+            {"id": "pass_token", "stable_key": "pass_token", "name": "通行令", "item_type": "permit", "owner_id": "player", "tags": ["permission"]},
+            {"id": "silver_key", "stable_key": "silver_key", "name": "银钥匙", "item_type": "key", "owner_id": "guard_alos", "tags": ["key"]},
+            {"id": "warehouse_key", "stable_key": "warehouse_key", "name": "仓库钥匙", "item_type": "key", "owner_id": "warehouse_keeper", "tags": ["key"]},
+            {"id": "coin_purse", "stable_key": "coin_purse", "name": "钱袋", "item_type": "money", "owner_id": "player", "tags": ["trade"]},
+            {"id": "grain_sack", "stable_key": "grain_sack", "name": "粮袋", "item_type": "resource", "location_id": "warehouse", "tags": ["resource"]},
+            {"id": "rumor_note", "stable_key": "rumor_note", "name": "传闻纸条", "item_type": "clue", "location_id": "tavern", "tags": ["rumor"]},
+            {"id": "water_bucket", "stable_key": "water_bucket", "name": "水桶", "item_type": "tool", "location_id": "well", "tags": ["tool"]},
+            {"id": "warehouse_ledger", "stable_key": "warehouse_ledger", "name": "仓库账本", "item_type": "evidence", "location_id": "warehouse", "tags": ["evidence"]},
+        ],
+        "resources": [{"entity": "player", "attr": "gold", "value": 3}, {"entity": "warehouse", "attr": "grain_stock", "value": 10}],
+        "action_templates": _base_actions(),
+        "initial_states": [
+            {"entity": "player", "attr": "location", "value": "village_gate"},
+            {"entity": "player", "attr": "gold", "value": 3},
+            {"entity": "guard_alos", "attr": "trust.player", "value": 3},
+            {"entity": "guard_alos", "attr": "hostility.player", "value": 0},
+            {"entity": "inner_gate", "attr": "open", "value": False},
+            {"entity": "warehouse", "attr": "locked", "value": True},
+            {"entity": "warehouse", "attr": "grain_stock", "value": 10},
+        ],
+        "initial_memories": [],
+        "initial_tensions": [
+            {"id": "low_trust_access", "tension_type": "trust_below_threshold", "description": "守卫还不完全信任玩家，进入内门需要更多理由。", "affected_entities": ["guard_alos", "player", "inner_gate"], "evidence": [{"type": "state", "entity": "guard_alos", "attr": "trust.player", "value": 3}], "suggested_actions": ["ask_about_topic", "request_help"], "priority": 0.8},
+            {"id": "warehouse_shortage", "tension_type": "resource_shortage", "description": "粮仓库存紧张，村里开始互相猜疑。", "affected_entities": ["warehouse", "grain_sack", "village_chief"], "evidence": [{"type": "state", "entity": "warehouse", "attr": "grain_stock", "value": 10}], "suggested_actions": ["inspect", "ask_about_topic", "trade"], "priority": 0.7},
+            {"id": "night_route_rumor", "tension_type": "rumor_unresolved", "description": "有人说后巷夜里出现过搬粮的人影。", "affected_entities": ["back_alley", "suspicious_traveler", "tavern_keeper"], "evidence": [{"type": "state", "entity": "warehouse", "attr": "locked", "value": True}], "suggested_actions": ["ask_about_topic", "inspect", "spread_rumor"], "priority": 0.6},
+        ],
+        "initial_quests": [
+            {"id": "gain_guard_trust", "title": "取得守卫信任", "issuer_id": "guard_alos", "tension_id": "low_trust_access", "objectives": [{"type": "change_relation", "target": "guard_alos"}], "rewards": [{"type": "unlock_affordance", "action_id": "ask_guard_open_gate"}], "failure_consequences": [{"type": "increase_tension", "target": "low_trust_access", "delta": 1}], "evidence": [{"tension_id": "low_trust_access"}]},
+            {"id": "investigate_grain_shortage", "title": "调查粮仓短缺", "issuer_id": "village_chief", "tension_id": "warehouse_shortage", "objectives": [{"type": "collect_evidence", "target": "warehouse_ledger"}], "rewards": [{"type": "change_relation", "entity": "village_chief", "rel": "trust", "delta": 1}], "failure_consequences": [{"type": "increase_tension", "target": "warehouse_shortage", "delta": 1}], "evidence": [{"tension_id": "warehouse_shortage"}]},
+        ],
+        "background_lore": ["村子靠通行与粮仓维持秩序。", "传闻会影响守卫、商人和村民对玩家的态度。"],
+    }
+    data["initial_memories"] = _belief_memories(data["characters"])
     return WorldSpec.model_validate(data)
 
 

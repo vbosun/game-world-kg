@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from game_world_kg.api import create_app
@@ -82,6 +84,19 @@ def test_sample_fallback_title_comes_from_idea() -> None:
     spec = sample_world_spec("village", "我想玩一个青楼小世界，玩家想脱身")
 
     assert spec.title == "花楼旧梦"
+
+
+def test_village_fallback_does_not_reuse_cultivation_template() -> None:
+    spec = sample_world_spec("village", "我想玩一个边境驿站，玩家是密探")
+    payload = spec.model_dump(mode="json")
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert spec.genre == "village"
+    assert spec.starting_area == "village_gate"
+    assert "村广场" in serialized
+    assert "仓库" in serialized
+    assert "外门院" not in serialized
+    assert "妖兽" not in serialized
 
 
 def test_chinese_ideas_get_distinct_world_ids() -> None:
