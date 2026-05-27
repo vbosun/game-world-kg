@@ -84,6 +84,7 @@ class LLMExtractor:
                 "content": (
                     "你是游戏世界日志抽取器。只输出 JSON 对象，不要解释。"
                     f"action_id 只能是: {', '.join(sorted(ALLOWED_ACTION_IDS))}。"
+                    "这是旧日志抽取 PoC 路径，只能使用上述固定 action_id；不要发明动态 WorldSpec action_id。"
                     "根据文本提出候选 action_id、confidence、evidence_span。"
                     "不要决定是否进入 canonical，系统会用本地 ScopeRouter 和 RuleEngine 裁判。"
                     "格式: {\"action_id\":\"...\",\"confidence\":0.0,\"evidence_span\":[0,1]}"

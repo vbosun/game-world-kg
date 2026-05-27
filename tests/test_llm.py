@@ -3,8 +3,24 @@ from __future__ import annotations
 import json
 import urllib.request
 
-from game_world_kg.llm import AnthropicClient, OpenAICompatibleClient, _to_anthropic_messages, build_llm_client_from_env
+from game_world_kg.llm import ActionParser, AnthropicClient, Narrator, OpenAICompatibleClient, _to_anthropic_messages, build_llm_client_from_env
 from game_world_kg.config import LLMConfig
+from game_world_kg.rules import RuleResult
+
+
+class CapturingLLM:
+    def __init__(self, payload: dict | None = None, text: str = "ok") -> None:
+        self.payload = payload or {"action_id": "talk_to_guard", "target_id": "guard_alos", "confidence": 0.9, "reason": "matched"}
+        self.text = text
+        self.messages: list[dict[str, str]] = []
+
+    def complete_json(self, messages, *, temperature=0):
+        self.messages = messages
+        return self.payload
+
+    def complete_text(self, messages, *, temperature=0.4, timeout_seconds=None):
+        self.messages = messages
+        return self.text
 
 
 class FakeResponse:
@@ -108,3 +124,33 @@ def test_anthropic_client_posts_messages_request(monkeypatch) -> None:
         "temperature": 0.2,
         "system": "strict",
     }
+
+
+def test_action_parser_prompt_forbids_inventing_affordance_actions() -> None:
+    llm = CapturingLLM()
+    parser = ActionParser(llm)
+
+    parser.parse("和守卫说话", {}, [{"action_id": "talk_to_guard", "target_id": "guard_alos"}], require_current_affordance=True)
+    system = llm.messages[0]["content"]
+
+    assert "不要发明 action_id" in system
+    assert "绝不能输出 affordances 中不存在的 action_id" in system
+    assert "目标含糊" in system
+
+
+def test_narrator_prompt_limits_output_to_rule_result_events() -> None:
+    llm = CapturingLLM(text="旁白")
+    narrator = Narrator(llm)
+
+    narrator.narrate(
+        "开门",
+        RuleResult("unlock_gate", False, "门锁着", "门打不开。", []),
+        [],
+        {},
+        [],
+    )
+    system = llm.messages[0]["content"]
+
+    assert "Only describe events and state changes present in rule_result/events" in system
+    assert "不得暗示隐藏后果" in system
+    assert "当前状态限制" in system

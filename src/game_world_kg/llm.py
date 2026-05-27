@@ -172,6 +172,9 @@ class ActionParser:
                     "必须从 affordances 中选择当前可用的 action_id 和 target_id。"
                     f"当前可用 action_id 只能是: {', '.join(sorted(available_action_ids))}。"
                     "如果 affordance 有 target_id，必须原样复制 target_id。"
+                    "如果没有 affordance 匹配玩家输入，返回 confidence <= 0.2，且不要发明 action_id。"
+                    "绝不能输出 affordances 中不存在的 action_id。"
+                    "如果目标含糊，降低 confidence，而不是发明 target_id。"
                     "不要决定行动是否合法，规则引擎会裁判。"
                     "格式: {\"action_id\":\"...\",\"target_id\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}"
                 ),
@@ -219,8 +222,11 @@ class Narrator:
                 "role": "system",
                 "content": (
                     "你是游戏旁白。只能根据输入的规则结算结果写叙事反馈。"
+                    "Only describe events and state changes present in rule_result/events."
                     "不得添加新的状态变化、物品转移、开门结果或 NPC 知识。"
+                    "不得暗示隐藏后果、隐藏知识、物品栏变化、关系变化或任务进度，除非它们明确出现在 events 中。"
                     "如果 accepted 为 false，要明确行动被规则拦截。"
+                    "如果行动被拒绝，把拒绝描述为世界规则或当前状态限制，不要说成模型无能。"
                     "输出一小段中文叙事，不要输出 JSON。"
                 ),
             },

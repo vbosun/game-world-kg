@@ -62,6 +62,8 @@ class WorldSpecNormalizer:
             fixed["initial_states"] = fixed.pop("states")
         if fixed.get("scale") == "small":
             fixed["scale"] = "small_dense"
+        if isinstance(fixed.get("background_lore"), str):
+            fixed["background_lore"] = [fixed["background_lore"]]
         fixed.setdefault("scale", "small_dense")
         fixed.setdefault("ontology_extensions", [])
         fixed.setdefault("resources", [])
@@ -132,6 +134,11 @@ class WorldSpecNormalizer:
                 for alias in ("type", "kind"):
                     if alias in tension:
                         tension["tension_type"] = tension.pop(alias)
+                        break
+            if "description" not in tension:
+                for alias in ("summary", "title"):
+                    if alias in tension:
+                        tension["description"] = tension.pop(alias)
                         break
             if "affected_entities" not in tension:
                 for alias in ("targets", "affected", "entities"):

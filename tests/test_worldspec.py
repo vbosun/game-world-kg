@@ -71,6 +71,12 @@ def test_prompt_describes_worldspec_as_executable_dsl() -> None:
     content = "\n".join(message["content"] for message in messages)
 
     assert "executable WorldSpec DSL" in content
+    assert 'scale must be exactly "small_dense"' in content
+    assert "goal_id" in content
+    assert "priority" in content
+    assert "description" in content
+    assert "background_lore must be list[str]" in content
+    assert "final_self_check" in content
     assert "Do not output string effects" in content
     assert "Do not output string quest objectives" in content
     assert "ACTION_TEMPLATE_INVALID_EXAMPLE" not in content
@@ -110,6 +116,51 @@ def test_validator_rejects_string_objectives_free_text_rules_and_canonical_belie
     assert "rule_must_not_be_free_text" in codes
     assert "quest_objective_must_be_object" in codes
     assert "memory_scope_canonical_contamination" in codes
+
+
+def test_normalizer_accepts_safe_lore_and_tension_description_aliases() -> None:
+    spec = sample_world_spec("village").model_dump(mode="json")
+    spec["background_lore"] = "这是一段背景。"
+    spec["initial_tensions"][0].pop("description")
+    spec["initial_tensions"][0]["summary"] = "村中粮账和钥匙传闻互相牵连。"
+
+    normalized = WorldSpecNormalizer().normalize(spec)
+
+    assert normalized["background_lore"] == ["这是一段背景。"]
+    assert normalized["initial_tensions"][0]["description"] == "村中粮账和钥匙传闻互相牵连。"
+
+
+def test_validator_preflight_rejects_worldspec_field_contract_errors() -> None:
+    spec = sample_world_spec("village").model_dump(mode="json")
+    spec["scale"] = "small"
+    spec["characters"][0]["goals"] = ["逃离这里"]
+    spec["characters"][1]["goals"][0].pop("goal_id")
+    spec["characters"][2]["goals"][0].pop("priority")
+    spec["initial_tensions"][0].pop("description")
+    spec["background_lore"] = "这是一段单个字符串背景设定。"
+    spec["factions"][0].pop("faction_type")
+    spec["factions"][1].pop("goals")
+    spec["factions"][2].pop("relations")
+    spec["resources"][0] = "player has 2 silver"
+    spec["initial_states"][0] = "player is in start room"
+    spec["initial_memories"][0] = "玩家听说了一个传闻"
+
+    report = WorldSpecValidator().validate(spec)
+    codes = {issue["code"] for issue in report["issues"]}
+
+    assert report["valid"] is False
+    assert "scale_must_be_small_dense" in codes
+    assert "character_goal_must_be_object" in codes
+    assert "character_goal_missing_goal_id" in codes
+    assert "character_goal_missing_priority" in codes
+    assert "tension_missing_description" in codes
+    assert "background_lore_must_be_list" in codes
+    assert "faction_missing_faction_type" in codes
+    assert "faction_missing_goals" in codes
+    assert "faction_missing_relations" in codes
+    assert "resource_shape_invalid" in codes
+    assert "initial_state_shape_invalid" in codes
+    assert "initial_memory_shape_invalid" in codes
 
 
 def test_worldspec_bootstrap_runtime_tick_and_evaluation() -> None:

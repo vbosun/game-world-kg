@@ -12,9 +12,11 @@ class FakeExtractionLLM:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
         self.json_calls = 0
+        self.messages = []
 
     def complete_json(self, messages, *, temperature=0):
         self.json_calls += 1
+        self.messages = messages
         return self.payload
 
     def complete_text(self, messages, *, temperature=0.4):
@@ -133,3 +135,14 @@ def test_llm_extractor_expands_too_short_evidence_span(service: GameWorldService
 
     assert candidate is not None
     assert candidate.evidence.span == (0, len(candidate.text))
+
+
+def test_llm_extractor_prompt_marks_legacy_fixed_action_ids(service: GameWorldService) -> None:
+    fake_llm = FakeExtractionLLM({"action_id": "guard_suspects_player", "confidence": 0.9, "evidence_span": [0, 18]})
+
+    LLMExtractor(fake_llm).extract("log_llm_004", "阿洛斯怀疑我。", service.state(DEMO_WORLD_ID), service.graph(DEMO_WORLD_ID)["nodes"])
+    system = fake_llm.messages[0]["content"]
+
+    assert "旧日志抽取 PoC 路径" in system
+    assert "不要发明动态 WorldSpec action_id" in system
+    assert "不要决定是否进入 canonical" in system

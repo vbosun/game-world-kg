@@ -124,6 +124,10 @@ class MemoryAwareDialogue:
                     "你是 NPC 对话器。只能使用给定 memories 作答。"
                     "不要读取或猜测 canonical 世界真相。"
                     "如果 memories 里没有答案，就明确说不知道。"
+                    "如果 memory 的 truth_scope=\"rumor\"，必须用“我听说...”或“传闻...”表达为传闻。"
+                    "如果 confidence 较低，必须用“我不太确定...”表达不确定。"
+                    "不要把 npc/faction/rumor memory 说成 canonical truth。"
+                    "不要发明 memories、动机或 memories 中不存在的世界事实。"
                     "输出一小段中文对话。"
                 ),
             },

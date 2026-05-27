@@ -328,9 +328,59 @@ class WorldSpecValidator:
 
 def _preflight_structural_issues(candidate: dict[str, Any]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
+    if candidate.get("scale") != "small_dense":
+        issues.append(ValidationIssue("scale_must_be_small_dense", "scale", 'scale must be exactly "small_dense".'))
+    if "background_lore" in candidate:
+        background_lore = candidate["background_lore"]
+        if not isinstance(background_lore, list) or any(not isinstance(item, str) for item in background_lore):
+            issues.append(ValidationIssue("background_lore_must_be_list", "background_lore", "background_lore must be a list of strings."))
+
+    for character_index, character in enumerate(candidate.get("characters", []) or []):
+        if not isinstance(character, dict):
+            continue
+        for goal_index, goal in enumerate(character.get("goals", []) or []):
+            path = f"characters[{character_index}].goals[{goal_index}]"
+            if not isinstance(goal, dict):
+                issues.append(ValidationIssue("character_goal_must_be_object", path, "Character goal must be an object."))
+                continue
+            if "goal_id" not in goal:
+                issues.append(ValidationIssue("character_goal_missing_goal_id", f"{path}.goal_id", "Character goal must include goal_id."))
+            if "priority" not in goal:
+                issues.append(ValidationIssue("character_goal_missing_priority", f"{path}.priority", "Character goal must include priority."))
+
+    for faction_index, faction in enumerate(candidate.get("factions", []) or []):
+        path = f"factions[{faction_index}]"
+        if not isinstance(faction, dict):
+            issues.append(ValidationIssue("faction_shape_invalid", path, "Faction must be an object."))
+            continue
+        if "faction_type" not in faction:
+            issues.append(ValidationIssue("faction_missing_faction_type", f"{path}.faction_type", "Faction must include faction_type."))
+        if "goals" not in faction:
+            issues.append(ValidationIssue("faction_missing_goals", f"{path}.goals", "Faction must include goals."))
+        if "relations" not in faction:
+            issues.append(ValidationIssue("faction_missing_relations", f"{path}.relations", "Faction must include relations."))
+
+    for resource_index, resource in enumerate(candidate.get("resources", []) or []):
+        path = f"resources[{resource_index}]"
+        if not isinstance(resource, dict) or not {"entity", "attr", "value"} <= set(resource):
+            issues.append(ValidationIssue("resource_shape_invalid", path, "Resource must be an object with entity, attr, and value."))
+
+    for state_index, state in enumerate(candidate.get("initial_states", []) or []):
+        path = f"initial_states[{state_index}]"
+        if not isinstance(state, dict) or not {"entity", "attr", "value"} <= set(state):
+            issues.append(ValidationIssue("initial_state_shape_invalid", path, "Initial state must be an object with entity, attr, and value."))
+
+    for memory_index, memory in enumerate(candidate.get("initial_memories", []) or []):
+        if not isinstance(memory, dict):
+            issues.append(ValidationIssue("initial_memory_shape_invalid", f"initial_memories[{memory_index}]", "Initial memory must be an object."))
+
     for index, rule in enumerate(candidate.get("rules", []) or []):
         if not isinstance(rule, dict):
             issues.append(ValidationIssue("rule_must_not_be_free_text", f"rules[{index}]", "Executable rule must be a structured object, not free text."))
+
+    for tension_index, tension in enumerate(candidate.get("initial_tensions", []) or []):
+        if isinstance(tension, dict) and "description" not in tension:
+            issues.append(ValidationIssue("tension_missing_description", f"initial_tensions[{tension_index}].description", "Tension must include description."))
 
     for index, template in enumerate(candidate.get("action_templates", []) or []):
         path = f"action_templates[{index}]"

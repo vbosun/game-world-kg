@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from game_world_kg.db import connect, init_db, transaction
+from game_world_kg.memory import MemoryAwareDialogue
 from game_world_kg.seed_village import DEMO_VILLAGE_WORLD_ID, seed_village_world
 from game_world_kg.service import GameWorldService
 
@@ -11,6 +12,18 @@ class HallucinatingLLM:
 
     def complete_text(self, messages, *, temperature=0.4):
         return "不记得你做过什么，你上次来时只点了三杯酒，然后就匆匆走了。"
+
+
+class CapturingDialogueLLM:
+    def __init__(self) -> None:
+        self.messages = []
+
+    def complete_json(self, messages, *, temperature=0):
+        return {"action_id": "talk_to_guard", "confidence": 0.9, "reason": "unused"}
+
+    def complete_text(self, messages, *, temperature=0.4):
+        self.messages = messages
+        return "传闻银钥匙还在守卫那里。"
 
 
 def test_npc_dialogue_uses_chroma_owner_scoped_memory(tmp_path) -> None:
@@ -25,6 +38,26 @@ def test_npc_dialogue_uses_chroma_owner_scoped_memory(tmp_path) -> None:
     assert answer["memories"]
     assert all(memory["truth_scope"] == "npc" for memory in answer["memories"])
     assert "银钥匙" in answer["answer"]
+
+
+def test_memory_dialogue_prompt_marks_rumor_and_low_confidence_boundaries() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    llm = CapturingDialogueLLM()
+    dialogue = MemoryAwareDialogue(conn, llm)
+
+    dialogue._llm_answer(
+        "guard_alos",
+        "钥匙在哪",
+        [{"memory_text": "有人说银钥匙在守卫那里。", "truth_scope": "rumor", "confidence": 0.4}],
+        "fallback",
+    )
+    system = llm.messages[0]["content"]
+
+    assert 'truth_scope="rumor"' in system
+    assert "我听说" in system
+    assert "confidence 较低" in system
+    assert "不要把 npc/faction/rumor memory 说成 canonical truth" in system
 
 
 def test_npc_dialogue_chroma_recall_does_not_cross_owner_scope() -> None:
