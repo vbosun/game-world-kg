@@ -45,6 +45,7 @@
 - [本地 MVP 落地方案](docs/mvp-plan.md)
 - [SQLite + Kuzu + Chroma 完整本地 Demo 方案](docs/full-local-demo-sqlite-kuzu-chroma-plan.md)
 - [WorldSpec 小世界生成器开发方案](docs/world-generator-development-plan.md)
+- [Beta 3：Playable Game Layer 游戏开发方案](docs/beta3-playable-game-layer-plan.md)
 
 严格对齐研究报告的详细设计：
 
@@ -82,6 +83,8 @@ Chroma  = 本地向量记忆 / 长文本证据 / 叙事与 NPC 记忆检索
 目标是做出一个可本地运行、可试玩 30～50 回合的小型村庄 Demo，完整验证事件日志、属性图、规则引擎、Affordance、NPC 记忆、谣言、任务生成、证据检索和 replay/rollback。
 
 随后进入 **Beta 2：WorldSpec 小世界生成器**：玩家输入一个世界想法，系统生成一个小而密、可回放、可解释、可试玩、可自运行的小世界。
+
+再进入 **Beta 3：Playable Game Layer**：把小世界生成器包装成玩家能持续游玩的 Web 文字沙盒 RPG，让玩家通过每回合合法行动改变局势、积累关系/知识/权限，形成“这是我自己的故事”的体验。
 
 ## 推荐第一个 Demo
 
@@ -135,7 +138,6 @@ GAME_WORLD_KG_LLM_BASE_URL=http://localhost:5001/v1
 GAME_WORLD_KG_LLM_MODEL=qwen3
 GAME_WORLD_KG_LLM_API_KEY=
 GAME_WORLD_KG_LLM_TIMEOUT=30
-GAME_WORLD_KG_WORLDGEN_LLM_TIMEOUT=180
 GAME_WORLD_KG_LLM_ENABLED=1
 ```
 
