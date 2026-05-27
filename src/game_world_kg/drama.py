@@ -48,14 +48,18 @@ class DramaManager:
                 score += 0.1
             scored.append(tension | {"foreground_score": round(score, 3)})
         scored.sort(key=lambda item: (-item["foreground_score"], item.get("tension_id") or item.get("id") or ""))
+        foreground = scored[: max(1, min(limit, 3))]
         return {
             "world_id": world_id,
-            "foreground_tensions": scored[: max(1, min(limit, 3))],
+            "foreground_tensions": foreground,
             "player_interest": {
                 "recent_locations": interest.recent_locations,
                 "recent_npcs": interest.recent_npcs,
                 "recent_quests": interest.recent_quests,
             },
+            "recommended_opportunity": _recommended_opportunity(foreground),
+            "npc_should_approach_player": _npc_should_approach_player(foreground),
+            "ambient_event": _ambient_event(foreground),
         }
 
 
@@ -67,3 +71,30 @@ def _compact(values: list[str | None]) -> list[str]:
             seen.add(value)
             result.append(value)
     return list(reversed(result))
+
+
+def _recommended_opportunity(tensions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not tensions:
+        return None
+    tension = tensions[0]
+    actions = tension.get("suggested_actions", [])
+    return {
+        "tension_id": tension.get("tension_id") or tension.get("id"),
+        "label": tension.get("reason") or tension.get("description") or "局势正在变化。",
+        "action_id": actions[0] if actions else None,
+    }
+
+
+def _npc_should_approach_player(tensions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for tension in tensions:
+        for entity_id in tension.get("affected_entities", []):
+            if entity_id != "player" and not entity_id.endswith(("gate", "shop", "field", "temple", "warehouse")):
+                return {"npc_id": entity_id, "tension_id": tension.get("tension_id") or tension.get("id"), "reason": tension.get("reason") or tension.get("description", "")}
+    return None
+
+
+def _ambient_event(tensions: list[dict[str, Any]]) -> dict[str, Any]:
+    if not tensions:
+        return {"type": "quiet", "summary": "周围暂时没有新的压力浮上来。"}
+    tension = tensions[0]
+    return {"type": "pressure", "tension_id": tension.get("tension_id") or tension.get("id"), "summary": tension.get("reason") or tension.get("description", "有人低声谈起当前局势。")}

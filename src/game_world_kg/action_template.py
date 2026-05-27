@@ -260,6 +260,24 @@ class EffectExecutor:
             old = self.state.get_state(world_id, entity_id, attr, scope)
             value = effect["value"]
             return "SET_STATE", {"entity_id": entity_id, "attr": attr, "value": value, "scope": scope}, [entity_id], [delta(entity_id, attr, old, value, scope=scope)]
+        if kind == "grant_permission":
+            entity_id = self._bind(effect.get("entity", "$actor"), bindings)
+            scope = effect.get("scope", "canonical")
+            old = self.state.get_state(world_id, entity_id, "permissions", scope) or []
+            value = _append_unique(old, effect["permission"])
+            return "SET_STATE", {"entity_id": entity_id, "attr": "permissions", "value": value, "scope": scope}, [entity_id], [delta(entity_id, "permissions", old, value, scope=scope)]
+        if kind == "add_identity_tag":
+            entity_id = self._bind(effect.get("entity", "$actor"), bindings)
+            scope = effect.get("scope", "canonical")
+            old = self.state.get_state(world_id, entity_id, "identity_tags", scope) or []
+            value = _append_unique(old, effect["tag"])
+            return "SET_STATE", {"entity_id": entity_id, "attr": "identity_tags", "value": value, "scope": scope}, [entity_id], [delta(entity_id, "identity_tags", old, value, scope=scope)]
+        if kind == "add_knowledge":
+            entity_id = self._bind(effect.get("entity", "$actor"), bindings)
+            scope = effect.get("scope", "canonical")
+            old = self.state.get_state(world_id, entity_id, "known_clues", scope) or []
+            value = _append_unique(old, effect["clue"])
+            return "SET_STATE", {"entity_id": entity_id, "attr": "known_clues", "value": value, "scope": scope}, [entity_id], [delta(entity_id, "known_clues", old, value, scope=scope)]
         if kind == "delta_resource":
             entity_id = self._bind(effect["entity"], bindings)
             attr = effect["attr"]
@@ -448,3 +466,8 @@ def _row_to_template(row: sqlite3.Row) -> ActionTemplate:
         preconditions=from_json(row["preconditions_json"], []),
         effects=from_json(row["effects_json"], []),
     )
+
+
+def _append_unique(value: Any, item: Any) -> list[Any]:
+    items = value if isinstance(value, list) else ([] if value is None else [value])
+    return [*items, item] if item not in items else items

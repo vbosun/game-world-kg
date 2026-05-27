@@ -61,11 +61,14 @@ class EmbeddingConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    base_url: str = "http://localhost:5001/v1"
-    model: str = "qwen3"
+    provider: str = "anthropic"
+    base_url: str = "https://api.anthropic.com/v1"
+    model: str = "claude-sonnet-4-20250514"
     api_key: str = ""
     timeout_seconds: float = 30.0
     worldgen_timeout_seconds: float = 180.0
+    max_tokens: int = 4096
+    anthropic_version: str = "2023-06-01"
     enabled: bool = True
 
     @classmethod
@@ -73,10 +76,13 @@ class LLMConfig:
         load_dotenv()
         timeout_seconds = float(os.getenv("GAME_WORLD_KG_LLM_TIMEOUT", "30"))
         return cls(
-            base_url=os.getenv("GAME_WORLD_KG_LLM_BASE_URL", "http://localhost:5001/v1").rstrip("/"),
-            model=os.getenv("GAME_WORLD_KG_LLM_MODEL", "qwen3"),
+            provider=os.getenv("GAME_WORLD_KG_LLM_PROVIDER", "anthropic").lower(),
+            base_url=os.getenv("GAME_WORLD_KG_LLM_BASE_URL", "https://api.anthropic.com/v1").rstrip("/"),
+            model=os.getenv("GAME_WORLD_KG_LLM_MODEL", "claude-sonnet-4-20250514"),
             api_key=os.getenv("GAME_WORLD_KG_LLM_API_KEY", ""),
             timeout_seconds=timeout_seconds,
             worldgen_timeout_seconds=float(os.getenv("GAME_WORLD_KG_WORLDGEN_LLM_TIMEOUT", str(timeout_seconds * 6))),
+            max_tokens=int(os.getenv("GAME_WORLD_KG_LLM_MAX_TOKENS", "4096")),
+            anthropic_version=os.getenv("GAME_WORLD_KG_ANTHROPIC_VERSION", "2023-06-01"),
             enabled=os.getenv("GAME_WORLD_KG_LLM_ENABLED", "1") not in {"0", "false", "False"},
         )

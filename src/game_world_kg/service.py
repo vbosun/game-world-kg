@@ -238,6 +238,40 @@ class GameWorldService:
             self._require_world(world_id)
             return PlayableTurnKernel(self).timeline(world_id, limit, mode)
 
+    def play_npc_tick(self, world_id: str, limit: int = 3) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            return self.tick_world(world_id, limit)
+
+    def play_npc_activity(self, world_id: str, limit: int = 20, mode: str = "roleplay") -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_world(world_id)
+            events = [event for event in self.events(world_id)[-limit:] if event["event_type"] == "NPC_ACTION"]
+            if mode == "dev":
+                return events
+            return [
+                {
+                    "turn_index": event["turn_index"],
+                    "npc_id": event["actor_id"],
+                    "action_id": event.get("payload", {}).get("action_id"),
+                    "target_id": event.get("payload", {}).get("target_id"),
+                    "summary": f"{event['actor_id']} took a foreground action.",
+                }
+                for event in events
+            ]
+
+    def play_explain_state(self, world_id: str, entity_id: str, attr: str, scope: str = "canonical", mode: str = "roleplay") -> dict[str, Any]:
+        explanation = self.explain_state(world_id, entity_id, attr, scope)
+        if mode == "dev":
+            return explanation
+        return _public_explanation(explanation)
+
+    def play_explain_quest(self, world_id: str, quest_id: str, mode: str = "roleplay") -> dict[str, Any]:
+        explanation = self.explain_quest(world_id, quest_id)
+        if mode == "dev":
+            return explanation
+        return _public_explanation(explanation)
+
     def quests(self, world_id: str) -> list[dict[str, Any]]:
         with self._lock:
             self._require_world(world_id)
@@ -306,6 +340,7 @@ class GameWorldService:
             report = validator.validate(spec)
             attempts: list[dict[str, Any]] = [report]
             candidate_payload = spec.model_dump(mode="json")
+            adopted_spec = spec.model_dump(mode="json")
             repairer = WorldSpecRepairer()
             for _ in range(max(0, repair_attempts)):
                 if report["valid"]:
@@ -314,6 +349,7 @@ class GameWorldService:
                 spec = WorldSpec.model_validate(candidate_payload)
                 report = validator.validate(spec)
                 attempts.append(report)
+            adopted_spec = spec.model_dump(mode="json")
             with transaction(self.conn):
                 self.conn.execute(
                     """
@@ -333,7 +369,10 @@ class GameWorldService:
                         json.dumps(
                             {
                                 "source": generator.last_source,
-                                "candidate": generator.last_candidate_payload or spec.model_dump(mode="json"),
+                                "llm_candidate": generator.last_candidate_payload,
+                                "generation_error": generator.last_error,
+                                "adopted_spec": adopted_spec,
+                                "candidate": generator.last_candidate_payload or adopted_spec,
                                 "validation_report": report,
                             },
                             ensure_ascii=False,
@@ -349,6 +388,8 @@ class GameWorldService:
                 "world_id": spec.world_id,
                 "source": generator.last_source,
                 "spec": spec.model_dump(mode="json"),
+                "llm_candidate": generator.last_candidate_payload,
+                "generation_error": generator.last_error,
                 "validation_report": report,
                 "repair_attempts": attempts,
             }
@@ -767,3 +808,30 @@ def _match_current_affordance(player_input: str, affordances: list[dict[str, Any
         if normalized == label or (label and label in normalized):
             return ActionCandidate(action_id=affordance["action_id"], target_id=affordance.get("target_id") or None, confidence=0.8, reason="matched_current_affordance")
     return None
+
+
+def _public_explanation(explanation: dict[str, Any]) -> dict[str, Any]:
+    private = {"source_event_id", "source_event", "evidence", "payload", "causal_parents"}
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: scrub(item) for key, item in value.items() if key not in private}
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        return value
+
+    cleaned = scrub(explanation)
+    if "state_deltas" in cleaned:
+        cleaned["causal_chain"] = [
+            {
+                "entity_id": item.get("entity_id"),
+                "attr": item.get("attr"),
+                "from": item.get("old_value"),
+                "to": item.get("new_value"),
+                "scope": item.get("scope"),
+            }
+            for item in cleaned.pop("state_deltas", [])
+        ]
+    if "required_state" in cleaned:
+        cleaned["current_objectives"] = cleaned.pop("required_state")
+    return cleaned

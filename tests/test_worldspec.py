@@ -10,6 +10,28 @@ from game_world_kg.service import GameWorldService
 from game_world_kg.worldspec import WorldIntentExtractor, WorldSpecValidator, sample_world_spec
 
 
+class InvalidWorldSpecLLM:
+    def complete_json(self, messages, *, temperature=0, timeout_seconds=None):
+        return {
+            "world_id": "flower_house_reminiscence",
+            "title": "花楼旧梦",
+            "genre": "village",
+            "theme": "身份与欲望的挣扎",
+            "starting_area": "花楼街口",
+            "player_start": {"location": "花楼街口", "state": "male_prostitute"},
+            "locations": ["花楼街口", "花楼内院"],
+            "characters": ["老板娘"],
+            "items": [],
+            "factions": [],
+            "action_templates": [{"id": "接客", "condition": "state_equals(player)", "effect": "set_state(player)"}],
+            "initial_tensions": [],
+            "initial_quests": [],
+        }
+
+    def complete_text(self, messages, *, temperature=0.4, timeout_seconds=None):
+        return "fallback narration"
+
+
 def test_sample_worldspecs_validate() -> None:
     for genre in ["cultivation", "ocean", "village"]:
         spec = sample_world_spec(genre)
@@ -71,6 +93,25 @@ def test_worldspec_api_routes() -> None:
     assert client.get(f"/worlds/{world_id}/worldspec").status_code == 200
     assert client.post(f"/worlds/{world_id}/tick").json()["npc_count"] >= 1
     assert client.get(f"/worlds/{world_id}/drama/foreground").json()["foreground_tensions"]
+
+
+def test_invalid_llm_candidate_is_visible_when_fallback_is_used() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    service = GameWorldService(conn, InvalidWorldSpecLLM())
+
+    generated = service.generate_worldspec("我想玩一个青楼小世界，玩家想脱身")
+
+    assert generated["source"] == "sample_fallback"
+    assert generated["llm_candidate"]["world_id"] == "flower_house_reminiscence"
+    assert "ValidationError" in generated["generation_error"]
+    assert generated["spec"]["world_id"].startswith("demo_border_village_")
+
+    row = conn.execute("SELECT text FROM source_texts WHERE source_type = 'worldspec_candidate'").fetchone()
+    payload = json.loads(row["text"])
+    assert payload["llm_candidate"]["world_id"] == "flower_house_reminiscence"
+    assert payload["adopted_spec"]["world_id"] == generated["spec"]["world_id"]
+    assert "ValidationError" in payload["generation_error"]
 
 
 def test_intent_does_not_prime_llm_with_fixed_title() -> None:

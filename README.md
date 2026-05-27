@@ -131,17 +131,22 @@ uv run python -m game_world_kg
 http://127.0.0.1:8000/debug
 ```
 
-AI 使用 OpenAI-compatible 接口，默认本地地址：
+AI 默认使用 Anthropic Messages API：
 
 ```text
-GAME_WORLD_KG_LLM_BASE_URL=http://localhost:5001/v1
-GAME_WORLD_KG_LLM_MODEL=qwen3
+GAME_WORLD_KG_LLM_PROVIDER=anthropic
+GAME_WORLD_KG_LLM_BASE_URL=https://api.anthropic.com/v1
+GAME_WORLD_KG_LLM_MODEL=claude-sonnet-4-20250514
 GAME_WORLD_KG_LLM_API_KEY=
+GAME_WORLD_KG_LLM_MAX_TOKENS=4096
+GAME_WORLD_KG_ANTHROPIC_VERSION=2023-06-01
 GAME_WORLD_KG_LLM_TIMEOUT=30
+GAME_WORLD_KG_WORLDGEN_LLM_TIMEOUT=180
 GAME_WORLD_KG_LLM_ENABLED=1
 ```
 
-也可以复制 `.env.example` 为 `.env`，在 `.env` 中配置本地模型地址和 API key。系统环境变量优先级高于 `.env`。
+也可以复制 `.env.example` 为 `.env`，在 `.env` 中配置 API key。若要继续使用本地 OpenAI-compatible 服务，将 `GAME_WORLD_KG_LLM_PROVIDER=openai_compatible`，并把 `GAME_WORLD_KG_LLM_BASE_URL` 改成本地 `/v1` 地址。系统环境变量优先级高于 `.env`。
+Anthropic provider 下如果没有 `GAME_WORLD_KG_LLM_API_KEY`，服务会自动以无 LLM 模式启动，避免本地测试误请求外部接口。
 
 LLM 只生成候选 action 和叙事文本；canonical 状态仍只能由 Rule Engine 写入。
 
@@ -151,6 +156,8 @@ LLM 只生成候选 action 和叙事文本；canonical 状态仍只能由 Rule E
 POST /worlds
 GET /worlds/demo_gate/state
 GET /worlds/demo_gate/graph
+GET /worlds/qingxi_town/play/state
+POST /worlds/qingxi_town/play/turn
 GET /worlds/demo_gate/events
 GET /worlds/demo_gate/affordances
 GET /worlds/demo_gate/quests

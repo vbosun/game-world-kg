@@ -14,6 +14,7 @@ from .evaluation import run_evaluation
 from .llm import build_llm_client_from_env
 from .service import GameWorldService
 from .seed import DEMO_WORLD_ID, seed_demo_world
+from .seed_qingxi import QINGXI_WORLD_ID, seed_qingxi_world
 from .seed_village import DEMO_VILLAGE_WORLD_ID, seed_village_world
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -64,6 +65,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     with transaction(conn):
         seed_demo_world(conn)
         seed_village_world(conn)
+        seed_qingxi_world(conn)
     service = GameWorldService(conn, build_llm_client_from_env(), storage)
 
     @app.post("/worlds")
@@ -117,6 +119,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/worlds/{world_id}/play/timeline")
     def get_play_timeline(world_id: str, limit: int = 20, mode: str = "roleplay") -> list[dict[str, Any]]:
         return _handle(lambda: service.play_timeline(world_id, limit, mode))
+
+    @app.post("/worlds/{world_id}/play/npc-tick")
+    def post_play_npc_tick(world_id: str, limit: int = 3) -> dict[str, Any]:
+        return _handle(lambda: service.play_npc_tick(world_id, limit))
+
+    @app.get("/worlds/{world_id}/play/npc-activity")
+    def get_play_npc_activity(world_id: str, limit: int = 20, mode: str = "roleplay") -> list[dict[str, Any]]:
+        return _handle(lambda: service.play_npc_activity(world_id, limit, mode))
+
+    @app.get("/worlds/{world_id}/play/explain/state/{entity_id}/{attr}")
+    def get_play_explain_state(world_id: str, entity_id: str, attr: str, scope: str = "canonical", mode: str = "roleplay") -> dict[str, Any]:
+        return _handle(lambda: service.play_explain_state(world_id, entity_id, attr, scope, mode))
+
+    @app.get("/worlds/{world_id}/play/explain/quest/{quest_id}")
+    def get_play_explain_quest(world_id: str, quest_id: str, mode: str = "roleplay") -> dict[str, Any]:
+        return _handle(lambda: service.play_explain_quest(world_id, quest_id, mode))
 
     @app.get("/worlds/{world_id}/quests")
     def get_quests(world_id: str) -> list[dict[str, Any]]:
@@ -248,7 +266,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "demo_world_id": DEMO_WORLD_ID, "demo_village_world_id": DEMO_VILLAGE_WORLD_ID}
+        return {"status": "ok", "demo_world_id": DEMO_WORLD_ID, "demo_village_world_id": DEMO_VILLAGE_WORLD_ID, "qingxi_world_id": QINGXI_WORLD_ID}
 
     @app.get("/evaluation")
     def evaluation() -> dict[str, Any]:

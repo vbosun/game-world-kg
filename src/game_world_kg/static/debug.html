@@ -247,6 +247,7 @@
         <div class="toolbar">
           <button class="ghost small" type="button" data-world="demo_gate">城门</button>
           <button class="ghost small" type="button" data-world="demo_village">村庄</button>
+          <button class="ghost small" type="button" data-world="qingxi_town">青溪镇</button>
         </div>
         <label for="worldIdea">WorldSpec 想法</label>
         <textarea id="worldIdea">我想玩一个修仙小镇，主角刚入外门，后山妖兽异常。</textarea>
@@ -614,7 +615,15 @@
     }
 
     function worldspecView() {
-      const generated = data.generatedWorldSpec ? card("Generated Candidate", `<pre>${escapeHtml(JSON.stringify(data.generatedWorldSpec, null, 2))}</pre>`) : "";
+      const generated = data.generatedWorldSpec ? [
+        card("Generation Status", `
+          <div class="pill">${escapeHtml(data.generatedWorldSpec.source || "-")}</div>
+          <div class="pill">${escapeHtml(data.generatedWorldSpec.world_id || "-")}</div>
+          ${data.generatedWorldSpec.generation_error ? `<p class="bad">${escapeHtml(data.generatedWorldSpec.generation_error)}</p>` : ""}
+        `),
+        card("LLM Candidate", data.generatedWorldSpec.llm_candidate ? `<pre>${escapeHtml(JSON.stringify(data.generatedWorldSpec.llm_candidate, null, 2))}</pre>` : `<p class="muted">没有 LLM 候选；当前使用 fallback。</p>`),
+        card("Adopted Spec", `<pre>${escapeHtml(JSON.stringify(data.generatedWorldSpec.spec, null, 2))}</pre>`),
+      ].join("") : "";
       const current = data.worldspec ? card("Current WorldSpec", `<pre>${escapeHtml(JSON.stringify(data.worldspec, null, 2))}</pre>`) : card("Current WorldSpec", `<p class="muted">当前世界没有保存的 WorldSpec。可以在左侧输入想法并生成。</p>`);
       const bootstrap = data.lastBootstrap ? card("Last Bootstrap", `<pre>${escapeHtml(JSON.stringify(data.lastBootstrap, null, 2))}</pre>`) : "";
       const worldgen = data.worldgenEvaluation ? card("Worldgen Evaluation", `<pre>${escapeHtml(JSON.stringify(data.worldgenEvaluation, null, 2))}</pre>`) : "";

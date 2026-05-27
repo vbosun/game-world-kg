@@ -30,6 +30,9 @@ SUPPORTED_EFFECTS = {
     "delta_resource",
     "add_memory",
     "add_conversation_event",
+    "grant_permission",
+    "add_identity_tag",
+    "add_knowledge",
 }
 
 
@@ -333,6 +336,7 @@ class WorldSpecGenerator:
         self.last_source = "sample_fallback"
         self.last_candidate_payload: dict[str, Any] | None = None
         self.last_repair_prompt: dict[str, Any] | None = None
+        self.last_error: str | None = None
 
     def generate(self, idea: str) -> WorldSpec:
         intent = WorldIntentExtractor().extract(idea)
@@ -371,7 +375,8 @@ class WorldSpecGenerator:
             )
             self.last_candidate_payload = payload
             return WorldSpec.model_validate(payload)
-        except Exception:
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
             return None
 
 

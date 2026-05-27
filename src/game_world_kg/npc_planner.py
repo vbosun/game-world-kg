@@ -126,11 +126,22 @@ class NPCPlanner:
 
     def _active_npcs(self, world_id: str) -> list[str]:
         graph = WorldGraph(self.conn).graph(world_id)
-        return [
-            node["id"]
-            for node in graph["nodes"]
-            if node["entity_type"] == "Character" and node["id"] != "player" and self.service.state(world_id).get(node["id"], {}).get("location")
-        ]
+        state = self.service.state(world_id)
+        player_location = state.get("player", {}).get("location")
+        tension_entities = {entity for tension in self.service.tensions(world_id)[:3] for entity in tension.get("affected_entities", [])}
+        scored: list[tuple[int, int, str]] = []
+        for index, node in enumerate(graph["nodes"]):
+            npc_id = node["id"]
+            if node["entity_type"] != "Character" or npc_id == "player" or not state.get(npc_id, {}).get("location"):
+                continue
+            score = 0
+            if state.get(npc_id, {}).get("location") == player_location:
+                score += 100
+            if npc_id in tension_entities:
+                score += 30
+            scored.append((-score, index, npc_id))
+        scored.sort()
+        return [npc_id for _, _, npc_id in scored]
 
     @staticmethod
     def _choose_action(context: PlannerContext) -> dict[str, Any] | None:

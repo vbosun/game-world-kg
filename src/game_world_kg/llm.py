@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -81,7 +82,7 @@ class OpenAICompatibleClient:
             timeout = self.config.timeout_seconds if timeout_seconds is None else timeout_seconds
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, http.client.IncompleteRead) as exc:
             raise LLMError(str(exc)) from exc
         try:
             return body["choices"][0]["message"]["content"]
@@ -92,6 +93,57 @@ class OpenAICompatibleClient:
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
+        return headers
+
+
+class AnthropicClient:
+    def __init__(self, config: LLMConfig) -> None:
+        self.config = config
+
+    def complete_json(self, messages: list[dict[str, str]], *, temperature: float = 0, timeout_seconds: float | None = None) -> dict[str, Any]:
+        text = self.complete_text(messages, temperature=temperature, timeout_seconds=timeout_seconds)
+        return _loads_json_object(text)
+
+    def complete_text(self, messages: list[dict[str, str]], *, temperature: float = 0.4, timeout_seconds: float | None = None) -> str:
+        system, anthropic_messages = _to_anthropic_messages(messages)
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": anthropic_messages,
+            "max_tokens": self.config.max_tokens,
+            "temperature": temperature,
+        }
+        if system:
+            payload["system"] = system
+        request = urllib.request.Request(
+            f"{self.config.base_url}/messages",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+        try:
+            timeout = self.config.timeout_seconds if timeout_seconds is None else timeout_seconds
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            raise LLMError(f"Anthropic HTTP {exc.code}: {error_body}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, http.client.IncompleteRead) as exc:
+            raise LLMError(str(exc)) from exc
+        try:
+            parts = [item.get("text", "") for item in body["content"] if item.get("type") == "text"]
+            text = "".join(parts)
+            if not text:
+                raise LLMError("empty Anthropic text response")
+            return text
+        except (KeyError, TypeError) as exc:
+            raise LLMError("invalid Anthropic response") from exc
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.config.api_key,
+            "anthropic-version": self.config.anthropic_version,
+        }
         return headers
 
 
@@ -194,11 +246,17 @@ class Narrator:
         return narration or rule_result.narration
 
 
-def build_llm_client_from_env() -> OpenAICompatibleClient | None:
+def build_llm_client_from_env() -> LLMClient | None:
     config = LLMConfig.from_env()
     if not config.enabled:
         return None
-    return OpenAICompatibleClient(config)
+    if config.provider == "anthropic" and not config.api_key:
+        return None
+    if config.provider == "anthropic":
+        return AnthropicClient(config)
+    if config.provider in {"openai", "openai_compatible"}:
+        return OpenAICompatibleClient(config)
+    raise LLMError(f"unsupported LLM provider: {config.provider}")
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:
@@ -215,3 +273,23 @@ def _loads_json_object(text: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise LLMError("LLM response JSON was not an object")
     return value
+
+
+def _to_anthropic_messages(messages: list[dict[str, str]]) -> tuple[str, list[dict[str, str]]]:
+    system_parts: list[str] = []
+    converted: list[dict[str, str]] = []
+    for message in messages:
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        if role == "system":
+            system_parts.append(content)
+            continue
+        if role not in {"user", "assistant"}:
+            role = "user"
+        if converted and converted[-1]["role"] == role:
+            converted[-1]["content"] = f"{converted[-1]['content']}\n\n{content}"
+        else:
+            converted.append({"role": role, "content": content})
+    if not converted:
+        converted.append({"role": "user", "content": ""})
+    return "\n\n".join(part for part in system_parts if part), converted

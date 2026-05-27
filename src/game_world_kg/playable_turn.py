@@ -148,7 +148,7 @@ class PlayableTurnKernel:
             "location": player.get("location"),
             "identity_tags": _list_value(player.get("identity_tags")),
             "permissions": _list_value(player.get("permissions")),
-            "known_clues": self._known_clues(world_id),
+            "known_clues": [*_list_value(player.get("known_clues")), *self._known_clues(world_id)],
             "resources": {key: value for key, value in player.items() if key in {"gold", "food", "stamina"} or key.startswith("resource.")},
             "skills": {key.removeprefix("skill."): value for key, value in player.items() if key.startswith("skill.")},
         }
@@ -248,6 +248,9 @@ class PlayableTurnKernel:
                 for item in foreground.get("foreground_tensions", [])
             ],
             "player_interest": foreground.get("player_interest", {}),
+            "recommended_opportunity": foreground.get("recommended_opportunity"),
+            "npc_should_approach_player": foreground.get("npc_should_approach_player"),
+            "ambient_event": foreground.get("ambient_event"),
         }
 
 
