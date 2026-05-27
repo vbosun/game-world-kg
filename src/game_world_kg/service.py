@@ -350,6 +350,28 @@ class GameWorldService:
                 report = validator.validate(spec)
                 attempts.append(report)
             adopted_spec = spec.model_dump(mode="json")
+            created_at = utc_now()
+            trace_id = f"trace_worldspec_{hashlib.sha256((idea + created_at).encode('utf-8')).hexdigest()[:16]}"
+            raw_llm_response = generator.last_raw_response
+            if raw_llm_response is None and generator.last_candidate_payload is not None:
+                raw_llm_response = json.dumps(generator.last_candidate_payload, ensure_ascii=False, sort_keys=True)
+            trace_payload = {
+                "trace_id": trace_id,
+                "created_at": created_at,
+                "requested_idea": idea,
+                "requested_genre": getattr(generator, "requested_genre", None),
+                "source": generator.last_source,
+                "raw_llm_response": raw_llm_response,
+                "parsed_candidate": generator.last_candidate_payload,
+                "normalized_candidate": getattr(generator, "last_normalized_candidate", None),
+                "validation_report": getattr(generator, "last_validation_report", None) or report,
+                "repair_attempts": getattr(generator, "last_repair_attempts", None) or attempts,
+                "adopted_spec": adopted_spec,
+                "adopted_spec_genre": adopted_spec.get("genre"),
+                "fallback_reason": generator.last_error if generator.last_source == "sample_fallback" else None,
+                "warnings": getattr(generator, "last_warnings", []),
+                "adopted_validation_report": report,
+            }
             with transaction(self.conn):
                 self.conn.execute(
                     """
@@ -381,18 +403,58 @@ class GameWorldService:
                         utc_now(),
                     ),
                 )
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO source_texts(id, world_id, source_type, text, turn_id, created_at)
+                    VALUES (?, ?, 'worldspec_generation_trace', ?, NULL, ?)
+                    """,
+                    (
+                        trace_id,
+                        spec.world_id,
+                        json.dumps(trace_payload, ensure_ascii=False, sort_keys=True),
+                        created_at,
+                    ),
+                )
                 status = "validated" if report["valid"] else "rejected"
                 spec_id = WorldSpecRepository(self.conn).save(spec, status, report)
             return {
                 "world_spec_id": spec_id,
                 "world_id": spec.world_id,
+                "trace_id": trace_id,
                 "source": generator.last_source,
                 "spec": spec.model_dump(mode="json"),
                 "llm_candidate": generator.last_candidate_payload,
+                "normalized_candidate": getattr(generator, "last_normalized_candidate", None),
                 "generation_error": generator.last_error,
                 "validation_report": report,
                 "repair_attempts": attempts,
             }
+
+    def latest_worldspec_generation_trace(self) -> dict[str, Any]:
+        row = self.conn.execute(
+            """
+            SELECT id, text FROM source_texts
+            WHERE source_type = 'worldspec_generation_trace'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            raise KeyError("worldspec_generation_trace")
+        payload = json.loads(row["text"])
+        payload.setdefault("trace_id", row["id"])
+        return payload
+
+    def worldspec_generation_trace(self, trace_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT text FROM source_texts WHERE id = ? AND source_type = 'worldspec_generation_trace'",
+            (trace_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(trace_id)
+        payload = json.loads(row["text"])
+        payload.setdefault("trace_id", trace_id)
+        return payload
 
     def validate_worldspec(self, payload: dict[str, Any]) -> dict[str, Any]:
         return WorldSpecValidator().validate(payload)

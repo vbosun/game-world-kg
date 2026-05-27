@@ -156,6 +156,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def v1_worldspec_repair(request: WorldSpecPayloadRequest) -> dict[str, Any]:
         return _handle(lambda: service.repair_worldspec(request.spec))
 
+    @app.get("/v1/worldspec/debug/latest")
+    def v1_worldspec_debug_latest() -> dict[str, Any]:
+        return _handle(service.latest_worldspec_generation_trace)
+
+    @app.get("/v1/worldspec/debug/{trace_id}")
+    def v1_worldspec_debug_trace(trace_id: str) -> dict[str, Any]:
+        return _handle(lambda: service.worldspec_generation_trace(trace_id))
+
     @app.post("/v1/worldspec/bootstrap")
     def v1_worldspec_bootstrap(request: WorldSpecPayloadRequest) -> dict[str, Any]:
         return _handle(lambda: service.bootstrap_worldspec(request.spec))

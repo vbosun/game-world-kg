@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 from game_world_kg.api import create_app
 from game_world_kg.db import connect, init_db
 from game_world_kg.service import GameWorldService
+from game_world_kg.worldspec_runtime import WorldSpecNormalizer
 from game_world_kg.worldspec import WorldIntentExtractor, WorldSpecValidator, sample_world_spec
+from game_world_kg.worldspec_prompt_templates import build_full_worldspec_prompt
 
 
 class InvalidWorldSpecLLM:
@@ -64,6 +66,52 @@ def test_validator_rejects_unsupported_action_effect() -> None:
     assert any(issue["code"] == "unsupported_effect" for issue in report["issues"])
 
 
+def test_prompt_describes_worldspec_as_executable_dsl() -> None:
+    messages = build_full_worldspec_prompt(WorldIntentExtractor().extract("海岛船团，风暴将至"))
+    content = "\n".join(message["content"] for message in messages)
+
+    assert "executable WorldSpec DSL" in content
+    assert "Do not output string effects" in content
+    assert "Do not output string quest objectives" in content
+    assert "ACTION_TEMPLATE_INVALID_EXAMPLE" not in content
+    assert "delta_resource: gold,+10" in content
+
+
+def test_normalizer_accepts_safe_action_aliases_but_not_string_effects() -> None:
+    spec = sample_world_spec("village").model_dump(mode="json")
+    spec["scale"] = "small"
+    spec["action_templates"][0].pop("action_id")
+    spec["action_templates"][0]["id"] = "serve_guest"
+    spec["action_templates"][0].pop("label_template")
+    spec["action_templates"][0]["title"] = "接待客人"
+    spec["action_templates"][0]["effects"] = ["delta_resource: gold,+10"]
+
+    normalized = WorldSpecNormalizer().normalize(spec)
+    report = WorldSpecValidator().validate(normalized)
+    codes = {issue["code"] for issue in report["issues"]}
+
+    assert normalized["scale"] == "small_dense"
+    assert normalized["action_templates"][0]["action_id"] == "serve_guest"
+    assert normalized["action_templates"][0]["label_template"] == "接待客人"
+    assert report["valid"] is False
+    assert "action_effect_must_be_object" in codes
+
+
+def test_validator_rejects_string_objectives_free_text_rules_and_canonical_beliefs() -> None:
+    spec = sample_world_spec("village").model_dump(mode="json")
+    spec["rules"] = ["夜晚不能出村"]
+    spec["initial_quests"][0]["objectives"] = ["完成一次接待并获得声望"]
+    spec["initial_memories"][0]["truth_scope"] = "canonical"
+
+    report = WorldSpecValidator().validate(spec)
+    codes = {issue["code"] for issue in report["issues"]}
+
+    assert report["valid"] is False
+    assert "rule_must_not_be_free_text" in codes
+    assert "quest_objective_must_be_object" in codes
+    assert "memory_scope_canonical_contamination" in codes
+
+
 def test_worldspec_bootstrap_runtime_tick_and_evaluation() -> None:
     conn = connect(":memory:")
     init_db(conn)
@@ -112,6 +160,36 @@ def test_invalid_llm_candidate_is_visible_when_fallback_is_used() -> None:
     assert payload["llm_candidate"]["world_id"] == "flower_house_reminiscence"
     assert payload["adopted_spec"]["world_id"] == generated["spec"]["world_id"]
     assert "ValidationError" in payload["generation_error"]
+
+
+def test_generation_trace_is_saved_and_available_from_debug_api() -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    service = GameWorldService(conn, InvalidWorldSpecLLM())
+
+    generated = service.generate_worldspec("我想玩一个青楼小世界，玩家想脱身")
+    trace = service.latest_worldspec_generation_trace()
+
+    assert trace["trace_id"] == generated["trace_id"]
+    assert trace["requested_genre"] == "village"
+    assert trace["source"] == "sample_fallback"
+    assert trace["parsed_candidate"]["world_id"] == "flower_house_reminiscence"
+    assert trace["normalized_candidate"]["action_templates"][0]["action_id"] == "接客"
+    assert trace["adopted_spec"]["world_id"] == generated["spec"]["world_id"]
+    assert trace["adopted_spec_genre"] == "village"
+    assert trace["validation_report"]["valid"] is False
+
+
+def test_worldspec_debug_routes_return_latest_and_trace_by_id() -> None:
+    client = TestClient(create_app(":memory:"))
+
+    generated = client.post("/v1/worldspec/generate", json={"idea": "青楼小世界，玩家想脱身"}).json()
+    latest = client.get("/v1/worldspec/debug/latest").json()
+    by_id = client.get(f"/v1/worldspec/debug/{generated['trace_id']}").json()
+
+    assert latest["trace_id"] == generated["trace_id"]
+    assert by_id["trace_id"] == generated["trace_id"]
+    assert by_id["adopted_spec"]["world_id"] == generated["spec"]["world_id"]
 
 
 def test_intent_does_not_prime_llm_with_fixed_title() -> None:

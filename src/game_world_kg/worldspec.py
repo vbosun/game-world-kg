@@ -208,6 +208,10 @@ class ValidationIssue:
 class WorldSpecValidator:
     def validate(self, candidate: WorldSpec | dict[str, Any]) -> dict[str, Any]:
         issues: list[ValidationIssue] = []
+        if isinstance(candidate, dict):
+            structural_issues = _preflight_structural_issues(candidate)
+            if structural_issues:
+                return {"valid": False, "issues": [issue.as_dict() for issue in structural_issues]}
         try:
             spec = candidate if isinstance(candidate, WorldSpec) else WorldSpec.model_validate(candidate)
         except ValidationError as exc:
@@ -287,7 +291,7 @@ class WorldSpecValidator:
             if memory.owner_id not in entities:
                 issues.append(ValidationIssue("dangling_ref", f"initial_memories.{memory.owner_id}", "memory owner must exist"))
             if memory.truth_scope == "canonical":
-                issues.append(ValidationIssue("scope_violation", f"initial_memories.{memory.owner_id}", "initial NPC beliefs must not enter canonical memory"))
+                issues.append(ValidationIssue("memory_scope_canonical_contamination", f"initial_memories.{memory.owner_id}", "initial NPC beliefs must not enter canonical memory"))
         for tension in spec.initial_tensions:
             if not tension.evidence:
                 issues.append(ValidationIssue("missing_evidence", f"initial_tensions.{tension.id}", "tension must have evidence"))
@@ -320,6 +324,76 @@ class WorldSpecValidator:
             "world_id": spec.world_id,
             "spec_hash": spec.spec_hash(),
         }
+
+
+def _preflight_structural_issues(candidate: dict[str, Any]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for index, rule in enumerate(candidate.get("rules", []) or []):
+        if not isinstance(rule, dict):
+            issues.append(ValidationIssue("rule_must_not_be_free_text", f"rules[{index}]", "Executable rule must be a structured object, not free text."))
+
+    for index, template in enumerate(candidate.get("action_templates", []) or []):
+        path = f"action_templates[{index}]"
+        if not isinstance(template, dict):
+            issues.append(ValidationIssue("action_template_shape_invalid", path, "Action template must be an object."))
+            continue
+        if not template.get("action_id"):
+            issues.append(ValidationIssue("action_template_missing_action_id", f"{path}.action_id", "Action template must include action_id."))
+        for precondition_index, precondition in enumerate(template.get("preconditions", []) or []):
+            if not isinstance(precondition, dict):
+                issues.append(
+                    ValidationIssue(
+                        "action_precondition_must_be_object",
+                        f"{path}.preconditions[{precondition_index}]",
+                        "Action precondition must be a structured object, not a string.",
+                    )
+                )
+                continue
+            if precondition.get("type") not in SUPPORTED_PREDICATES:
+                issues.append(
+                    ValidationIssue(
+                        "unsupported_predicate_type",
+                        f"{path}.preconditions[{precondition_index}]",
+                        str(precondition.get("type")),
+                    )
+                )
+        for effect_index, effect in enumerate(template.get("effects", []) or []):
+            if not isinstance(effect, dict):
+                issues.append(
+                    ValidationIssue(
+                        "action_effect_must_be_object",
+                        f"{path}.effects[{effect_index}]",
+                        "Action effect must be a structured object, not a string.",
+                    )
+                )
+                continue
+            if effect.get("type") not in SUPPORTED_EFFECTS:
+                issues.append(ValidationIssue("unsupported_effect_type", f"{path}.effects[{effect_index}]", str(effect.get("type"))))
+                issues.append(ValidationIssue("unsupported_effect", f"{path}.effects[{effect_index}]", str(effect.get("type"))))
+
+    for quest_index, quest in enumerate(candidate.get("initial_quests", []) or []):
+        if not isinstance(quest, dict):
+            continue
+        for objective_index, objective in enumerate(quest.get("objectives", []) or []):
+            if not isinstance(objective, dict):
+                issues.append(
+                    ValidationIssue(
+                        "quest_objective_must_be_object",
+                        f"initial_quests[{quest_index}].objectives[{objective_index}]",
+                        "Quest objective must be a structured object, not natural-language text.",
+                    )
+                )
+
+    for memory_index, memory in enumerate(candidate.get("initial_memories", []) or []):
+        if isinstance(memory, dict) and memory.get("truth_scope") == "canonical":
+            issues.append(
+                ValidationIssue(
+                    "memory_scope_canonical_contamination",
+                    f"initial_memories[{memory_index}].truth_scope",
+                    "NPC beliefs must not use canonical memory scope.",
+                )
+            )
+    return issues
 
 
 class WorldIntentExtractor:

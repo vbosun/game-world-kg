@@ -31,12 +31,14 @@ class WorldSpecNormalizer:
     def normalize(self, candidate: dict[str, Any]) -> dict[str, Any]:
         fixed = json.loads(json.dumps(candidate, ensure_ascii=False))
         self._normalize_top_level(fixed)
+        self._normalize_locations(fixed)
         self._normalize_stable_keys(fixed, "locations")
         self._normalize_stable_keys(fixed, "characters")
         self._normalize_stable_keys(fixed, "items")
         self._normalize_stable_keys(fixed, "factions")
         self._normalize_characters(fixed)
         self._normalize_items(fixed)
+        self._normalize_action_templates(fixed)
         self._normalize_tensions(fixed)
         self._normalize_quests(fixed)
         return fixed
@@ -58,11 +60,22 @@ class WorldSpecNormalizer:
             fixed["initial_memories"] = fixed.pop("memories")
         if "initial_states" not in fixed and "states" in fixed:
             fixed["initial_states"] = fixed.pop("states")
+        if fixed.get("scale") == "small":
+            fixed["scale"] = "small_dense"
         fixed.setdefault("scale", "small_dense")
         fixed.setdefault("ontology_extensions", [])
         fixed.setdefault("resources", [])
         fixed.setdefault("rules", [])
         fixed.setdefault("background_lore", [])
+
+    def _normalize_locations(self, fixed: dict[str, Any]) -> None:
+        for location in fixed.get("locations", []) or []:
+            if not isinstance(location, dict):
+                continue
+            if "location_type" not in location and "type" in location:
+                location["location_type"] = location.pop("type")
+            location.setdefault("connects_to", [])
+            location.setdefault("tags", [])
 
     def _normalize_stable_keys(self, fixed: dict[str, Any], key: str) -> None:
         for item in fixed.get(key, []) or []:
@@ -97,6 +110,19 @@ class WorldSpecNormalizer:
                         item["location_id"] = item.pop(alias)
                         break
             item.setdefault("tags", [])
+
+    def _normalize_action_templates(self, fixed: dict[str, Any]) -> None:
+        for template in fixed.get("action_templates", []) or []:
+            if not isinstance(template, dict):
+                continue
+            if "action_id" not in template and "id" in template:
+                template["action_id"] = template.pop("id")
+            if "label_template" not in template and "title" in template:
+                template["label_template"] = template.pop("title")
+            template.setdefault("target_selector", {})
+            template.setdefault("arg_schema", {})
+            template.setdefault("preconditions", [])
+            template.setdefault("risk", "low")
 
     def _normalize_tensions(self, fixed: dict[str, Any]) -> None:
         for tension in fixed.get("initial_tensions", []) or []:
