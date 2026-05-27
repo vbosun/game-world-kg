@@ -91,32 +91,32 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return _handle(lambda: service.affordances(world_id))
 
     @app.get("/worlds/{world_id}/play/state")
-    def get_play_state(world_id: str) -> dict[str, Any]:
-        return _handle(lambda: service.play_state(world_id))
+    def get_play_state(world_id: str, mode: str = "roleplay") -> dict[str, Any]:
+        return _handle(lambda: service.play_state(world_id, mode))
 
     @app.get("/worlds/{world_id}/play/scene")
-    def get_play_scene(world_id: str) -> dict[str, Any]:
-        return _handle(lambda: service.play_scene(world_id))
+    def get_play_scene(world_id: str, mode: str = "roleplay") -> dict[str, Any]:
+        return _handle(lambda: service.play_scene(world_id, mode))
 
     @app.get("/worlds/{world_id}/play/affordances")
     def get_play_affordances(world_id: str) -> list[dict[str, Any]]:
         return _handle(lambda: service.play_affordances(world_id))
 
     @app.post("/worlds/{world_id}/play/turn")
-    def post_play_turn(world_id: str, request: PlayTurnRequest) -> dict[str, Any]:
-        return _handle(lambda: service.play_turn(world_id, request.player_input, request.selected_action_id, request.selected_target_id))
+    def post_play_turn(world_id: str, request: PlayTurnRequest, mode: str = "roleplay") -> dict[str, Any]:
+        return _handle(lambda: service.play_turn(world_id, request.player_input, request.selected_action_id, request.selected_target_id, mode))
 
     @app.get("/worlds/{world_id}/play/quests")
-    def get_play_quests(world_id: str) -> list[dict[str, Any]]:
-        return _handle(lambda: service.play_quests(world_id))
+    def get_play_quests(world_id: str, mode: str = "roleplay") -> list[dict[str, Any]]:
+        return _handle(lambda: service.play_quests(world_id, mode))
 
     @app.get("/worlds/{world_id}/play/tensions")
-    def get_play_tensions(world_id: str) -> list[dict[str, Any]]:
-        return _handle(lambda: service.play_tensions(world_id))
+    def get_play_tensions(world_id: str, mode: str = "roleplay") -> list[dict[str, Any]]:
+        return _handle(lambda: service.play_tensions(world_id, mode))
 
     @app.get("/worlds/{world_id}/play/timeline")
-    def get_play_timeline(world_id: str, limit: int = 20) -> list[dict[str, Any]]:
-        return _handle(lambda: service.play_timeline(world_id, limit))
+    def get_play_timeline(world_id: str, limit: int = 20, mode: str = "roleplay") -> list[dict[str, Any]]:
+        return _handle(lambda: service.play_timeline(world_id, limit, mode))
 
     @app.get("/worlds/{world_id}/quests")
     def get_quests(world_id: str) -> list[dict[str, Any]]:

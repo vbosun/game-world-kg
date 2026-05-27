@@ -205,38 +205,38 @@ class GameWorldService:
             self._require_world(world_id)
             return AffordanceEngine(self.conn).list_for_player(world_id)
 
-    def play_state(self, world_id: str) -> dict[str, Any]:
+    def play_state(self, world_id: str, mode: str = "roleplay") -> dict[str, Any]:
         with self._lock:
             self._require_world(world_id)
-            return PlayableTurnKernel(self).play_state(world_id)
+            return PlayableTurnKernel(self).play_state(world_id, mode)
 
-    def play_scene(self, world_id: str) -> dict[str, Any]:
+    def play_scene(self, world_id: str, mode: str = "roleplay") -> dict[str, Any]:
         with self._lock:
             self._require_world(world_id)
-            return PlayableTurnKernel(self).play_state(world_id)["scene"]
+            return PlayableTurnKernel(self).play_state(world_id, mode)["scene"]
 
     def play_affordances(self, world_id: str) -> list[dict[str, Any]]:
         with self._lock:
             self._require_world(world_id)
             return PlayableTurnKernel(self).play_affordances(world_id)
 
-    def play_turn(self, world_id: str, player_input: str, selected_action_id: str | None = None, selected_target_id: str | None = None) -> dict[str, Any]:
-        return PlayableTurnKernel(self).play_turn(world_id, player_input, selected_action_id=selected_action_id, selected_target_id=selected_target_id)
+    def play_turn(self, world_id: str, player_input: str, selected_action_id: str | None = None, selected_target_id: str | None = None, mode: str = "roleplay") -> dict[str, Any]:
+        return PlayableTurnKernel(self).play_turn(world_id, player_input, selected_action_id=selected_action_id, selected_target_id=selected_target_id, mode=mode)
 
-    def play_quests(self, world_id: str) -> list[dict[str, Any]]:
+    def play_quests(self, world_id: str, mode: str = "roleplay") -> list[dict[str, Any]]:
         with self._lock:
             self._require_world(world_id)
-            return PlayableTurnKernel(self).quest_journal(world_id)
+            return PlayableTurnKernel(self).quest_journal(world_id, mode)
 
-    def play_tensions(self, world_id: str) -> list[dict[str, Any]]:
+    def play_tensions(self, world_id: str, mode: str = "roleplay") -> list[dict[str, Any]]:
         with self._lock:
             self._require_world(world_id)
-            return PlayableTurnKernel(self).tension_journal(world_id)
+            return PlayableTurnKernel(self).tension_journal(world_id, mode)
 
-    def play_timeline(self, world_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    def play_timeline(self, world_id: str, limit: int = 20, mode: str = "roleplay") -> list[dict[str, Any]]:
         with self._lock:
             self._require_world(world_id)
-            return PlayableTurnKernel(self).timeline(world_id, limit)
+            return PlayableTurnKernel(self).timeline(world_id, limit, mode)
 
     def quests(self, world_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -247,6 +247,56 @@ class GameWorldService:
         with self._lock:
             self._require_world(world_id)
             return TensionScanner(self).scan(world_id)
+
+    def turn_bound(
+        self,
+        world_id: str,
+        player_input: str,
+        action_id: str,
+        target_id: str | None = None,
+        extractor: str = "play_input_binder",
+        confidence: float = 1.0,
+    ) -> dict[str, Any]:
+        self._require_world(world_id)
+        with self._lock:
+            with transaction(self.conn):
+                log = EventLog(self.conn)
+                turn_id = log.create_turn(world_id, player_input)
+                turn = self.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+                result = RuleEngine(self.conn).resolve_turn(
+                    world_id,
+                    turn_id,
+                    turn["turn_index"],
+                    player_input,
+                    action_id=action_id,
+                    target_id=target_id,
+                    extractor=extractor,
+                    confidence=confidence,
+                )
+                event_payloads = [
+                    {
+                        "id": event.id,
+                        "event_type": event.event_type,
+                        "actor_id": event.actor_id,
+                        "participants": event.participants,
+                        "payload": event.payload,
+                    }
+                    for event in result.events
+                ]
+                affordances = AffordanceEngine(self.conn).list_for_player(world_id)
+                narration = self.narrator.narrate(player_input, result, event_payloads, WorldGraph(self.conn).state(world_id), affordances)
+                self.conn.execute("UPDATE turns SET narration = ? WHERE id = ?", (narration, turn_id))
+        return {
+            "turn_id": turn_id,
+            "turn_index": turn["turn_index"],
+            "accepted": result.accepted,
+            "action_id": result.action_id,
+            "reason": result.reason,
+            "narration": narration,
+            "events": event_payloads,
+            "affordances": affordances,
+            "extractor": extractor,
+        }
 
     def generate_worldspec(self, idea: str, repair_attempts: int = 2) -> dict[str, Any]:
         with self._lock:
@@ -378,6 +428,8 @@ class GameWorldService:
             canonical_contamination_rate = _measure_canonical_contamination_rate(self.conn, world_id)
             return {
                 "world_id": world_id,
+                "mode": "dev_destructive_evaluation",
+                "warning": "worldgen_evaluation replays state and rebuilds projectors; use play APIs for player-facing checks.",
                 "worldspec_valid_rate": 1.0 if validation.get("valid") else 0.0,
                 "repair_success_rate": 1.0 if validation.get("valid") else 0.0,
                 "bootstrap_replay_equivalence": 1.0 if before_replay_hash == after_replay_hash and bool(replay["state"]) else 0.0,
