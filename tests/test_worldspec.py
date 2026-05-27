@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -10,6 +11,7 @@ from game_world_kg.service import GameWorldService
 from game_world_kg.worldspec_runtime import WorldSpecNormalizer
 from game_world_kg.worldspec import WorldIntentExtractor, WorldSpecValidator, sample_world_spec
 from game_world_kg.worldspec_prompt_templates import build_full_worldspec_prompt
+from game_world_kg.worldspec_safe import WorldSpecGenerator as SafeWorldSpecGenerator
 
 
 class InvalidWorldSpecLLM:
@@ -29,6 +31,22 @@ class InvalidWorldSpecLLM:
             "initial_tensions": [],
             "initial_quests": [],
         }
+
+    def complete_text(self, messages, *, temperature=0.4, timeout_seconds=None):
+        return "fallback narration"
+
+
+class ValidWorldSpecLLM:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(worldgen_timeout_seconds=600)
+        self.timeout_seconds = None
+        self.last_raw_text = None
+
+    def complete_json(self, messages, *, temperature=0, timeout_seconds=None):
+        self.timeout_seconds = timeout_seconds
+        payload = sample_world_spec("village").model_dump(mode="json")
+        self.last_raw_text = json.dumps(payload, ensure_ascii=False)
+        return payload
 
     def complete_text(self, messages, *, temperature=0.4, timeout_seconds=None):
         return "fallback narration"
@@ -81,6 +99,15 @@ def test_prompt_describes_worldspec_as_executable_dsl() -> None:
     assert "Do not output string quest objectives" in content
     assert "ACTION_TEMPLATE_INVALID_EXAMPLE" not in content
     assert "delta_resource: gold,+10" in content
+
+
+def test_worldspec_generator_uses_worldgen_timeout() -> None:
+    llm = ValidWorldSpecLLM()
+
+    spec = SafeWorldSpecGenerator(llm).generate("我想玩一个边境驿站，玩家是密探")
+
+    assert spec.world_id
+    assert llm.timeout_seconds == 600
 
 
 def test_normalizer_accepts_safe_action_aliases_but_not_string_effects() -> None:

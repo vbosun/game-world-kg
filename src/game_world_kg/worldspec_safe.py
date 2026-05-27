@@ -54,7 +54,9 @@ class WorldSpecGenerator:
 
     def _generate_with_llm(self, intent: dict[str, str]) -> WorldSpec | None:
         try:
-            payload = self.llm_client.complete_json(_worldspec_messages(intent), temperature=0.2)
+            timeout_seconds = getattr(getattr(self.llm_client, "config", None), "worldgen_timeout_seconds", None)
+            timeout_kwargs = {"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}
+            payload = self.llm_client.complete_json(_worldspec_messages(intent), temperature=0.2, **timeout_kwargs)
             self.last_raw_response = getattr(self.llm_client, "last_raw_text", None)
             self.last_candidate_payload = payload
             normalized = self.normalizer.normalize(payload)
