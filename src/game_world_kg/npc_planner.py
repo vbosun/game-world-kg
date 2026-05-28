@@ -153,16 +153,21 @@ class NPCPlanner:
     def _midground_npcs(self, world_id: str, exclude: list[str]) -> list[str]:
         graph = WorldGraph(self.conn).graph(world_id)
         state = self.service.state(world_id)
+        tension_entities = {entity for tension in self.service.tensions(world_id)[:5] for entity in tension.get("affected_entities", [])}
         exclude_set = set(exclude) | {"player"}
-        npcs: list[str] = []
+        engine = ActionTemplateEngine(self.conn)
+        scored: list[tuple[int, int, str]] = []
         for node in graph["nodes"]:
             npc_id = node["id"]
             if node["entity_type"] != "Character" or npc_id in exclude_set or not state.get(npc_id, {}).get("location"):
                 continue
-            npcs.append(npc_id)
-        scored = [(hash(npc_id) % 100, npc_id) for npc_id in npcs]
-        scored.sort(reverse=True)
-        return [npc_id for _, npc_id in scored]
+            # Score by available affordance count (activity potential) + tension relevance
+            aff_count = len(engine.list_for_actor(world_id, npc_id))
+            tension_bonus = 30 if npc_id in tension_entities else 0
+            score = aff_count * 10 + tension_bonus
+            scored.append((-score, 0, npc_id))
+        scored.sort()
+        return [npc_id for _, _, npc_id in scored]
 
     def _tick_background(self, world_id: str) -> dict[str, Any] | None:
         state = self.service.state(world_id)
