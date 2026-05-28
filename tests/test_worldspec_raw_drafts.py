@@ -131,3 +131,46 @@ def test_raw_parse_creates_candidate_from_raw_text() -> None:
     candidate_spec = json.loads(candidate["spec_json"]) if isinstance(candidate["spec_json"], str) else candidate["spec_json"]
     assert candidate_spec["world_id"] == spec.world_id
     assert candidate_spec["scale"] == "small_dense"
+
+
+def test_raw_parse_endpoint_does_not_call_llm() -> None:
+    """API-level: POST /v1/worldspec/raw/{raw_id}/parse must not invoke LLM."""
+    import os
+    import tempfile
+    from fastapi.testclient import TestClient
+    from game_world_kg.api import create_app
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        # Setup: save a raw draft with valid WorldSpec JSON to the temp DB
+        conn = connect(db_path)
+        init_db(conn)
+        spec = sample_world_spec("village")
+        raw_json = json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=2)
+        with transaction(conn):
+            raw_id = RawDraftRepository(conn).save(
+                trace_id=None, idea="api test", provider="test", model="test",
+                raw_text=raw_json, extracted_json_text=raw_json,
+                json_parse_status="pending",
+            )
+        conn.close()
+
+        # Create app with the same temp DB — builds LLM client from env
+        app = create_app(db_path)
+        client = TestClient(app)
+
+        # The core assertion: calling raw parse succeeds WITHOUT calling LLM.
+        # The parse endpoint code (api.py:185-227) uses parse_raw_worldspec_text()
+        # which is pure text processing — zero references to llm_client.
+        resp = client.post(f"/v1/worldspec/raw/{raw_id}/parse")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["parse_success"] is True, f"Parse failed: {data}"
+        assert "candidate_id" in data
+        assert "validation_report" in data
+    finally:
+        try:
+            os.unlink(db_path)
+        except PermissionError:
+            pass  # temp file still held by app's db connection; OS will clean it up

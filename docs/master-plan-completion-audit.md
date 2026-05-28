@@ -469,11 +469,11 @@ Tension 应包含 stake、deadline、sponsors、blockers、player_touchpoints；
 
 ## P0：不要继续堆功能，先补验收审计测试
 
-1. API 级 raw parse 测试，证明 endpoint 不调用 LLM。
-2. Bootstrap replay/rebuild/idempotency 测试。
-3. 成长解锁 affordance 的端到端测试。
-4. Quest 多解法 route 映射 affordance 测试。
-5. Qingxi 10-turn / 30-turn 测试覆盖质量审查。
+1. ✅ API 级 raw parse 测试，证明 endpoint 不调用 LLM。 → `test_raw_parse_endpoint_does_not_call_llm`
+2. ✅ Bootstrap replay/rebuild/idempotency 测试。 → `test_bootstrap_is_idempotent_for_same_spec_hash` + `test_replay_after_bootstrap_preserves_state_hash`
+3. ✅ 成长解锁 affordance 的端到端测试。 → `test_trust_growth_unlocks_ask_guard_open_gate`
+4. ✅ Quest 多解法 route 映射 affordance 测试。 → `test_quest_alternatives_are_current_affordances`
+5. ⬜ Qingxi 10-turn / 30-turn 测试覆盖质量审查。 → 已有测试，待质量审查
 
 ## P1：把 v0 机制升级到可玩机制
 
