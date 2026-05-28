@@ -158,6 +158,32 @@ class TensionScanner:
 
         generated = [tension.as_dict() for tension in tensions]
         known = {item["tension_id"] for item in generated}
+
+        # Generic scan: locked locations not covered by hardcoded tensions
+        graph = self.service.graph(world_id)
+        for node in graph.get("nodes", []):
+            entity_id = node["id"]
+            if node.get("entity_type") != "Location":
+                continue
+            loc_state = state.get(entity_id, {})
+            if loc_state.get("locked") is True and loc_state.get("open") is not True:
+                tid = f"tension_locked_{entity_id}"
+                if tid not in known:
+                    name = node.get("name") or entity_id
+                    generated.append({
+                        "tension_id": tid,
+                        "type": "locked_location",
+                        "reason": f"{name} 处于上锁状态，玩家无法通过。",
+                        "evidence": [
+                            _state_evidence(entity_id, "locked", True),
+                            _state_evidence(entity_id, "open", loc_state.get("open")),
+                        ],
+                        "affected_entities": ["player", entity_id],
+                        "suggested_actions": [],
+                        "priority": 0.7,
+                    })
+                    known.add(tid)
+
         for row in self.service.conn.execute(
             """
             SELECT properties_json FROM nodes
