@@ -328,6 +328,8 @@ class GameWorldService:
             "action_id": result.action_id,
             "reason": result.reason,
             "narration": narration,
+            "outcome": result.outcome.value if result.outcome else None,
+            "costs": result.costs,
             "events": event_payloads,
             "affordances": affordances,
             "extractor": extractor,
