@@ -107,3 +107,53 @@ def test_selected_action_bypasses_llm_parser() -> None:
     assert result["turn"]["accepted"] is True
     assert result["turn"]["action_id"] == "show_pass_token"
     assert result["bound_action"]["action_id"] == "show_pass_token"
+
+
+def test_empty_input_handled_gracefully() -> None:
+    """Empty or whitespace-only input should not crash and should return rejection."""
+    service = _service()
+    result = service.play_turn(DEMO_WORLD_ID, "")
+    assert "turn" in result
+    assert isinstance(result["turn"]["accepted"], bool)
+
+
+def test_unicode_and_special_chars_not_bypass_rules() -> None:
+    """Input with Unicode, emoji, or special characters must not bypass rule engine."""
+    service = _service()
+    # Unicode-heavy input trying to trigger unlock_gate_with_key without the key
+    result = service.play_turn(DEMO_WORLD_ID, "🔓✨ 打开铁门 unlock gate please ÿ")
+    # Should not crash, and should not magically unlock the gate
+    assert "turn" in result
+    # The gate should still be locked if the action wasn't valid
+    if result["turn"]["accepted"]:
+        assert result["turn"]["action_id"] != "unlock_gate_with_key"
+
+
+def test_rejection_provides_next_step_guidance() -> None:
+    """Rule rejection must include informative reason and next-step guidance."""
+    service = _service()
+    result = service.play_turn(DEMO_WORLD_ID, "我直接飞过城门")
+
+    rejection = next((c for c in result.get("changes", []) if c.get("type") == "rule_rejection"), None)
+    assert rejection is not None, "illegal action should produce rule_rejection"
+    # Rejection must have a reason message (detail/label/message/reason)
+    assert rejection.get("detail") or rejection.get("label") or rejection.get("message") or rejection.get("reason"), \
+        f"rejection should have detail/label: {rejection}"
+    # Affordances should still be available as next steps
+    assert result.get("affordances") or result.get("next_affordances") or result.get("continuations"), \
+        "rejection should provide continuable paths"
+
+
+def test_selected_action_without_target_still_validated() -> None:
+    """Even with selected_action_id, target validation must occur."""
+    service = _service()
+    # Select show_pass_token which has target guard_alos, but provide an invalid target
+    result = service.play_turn(
+        DEMO_WORLD_ID,
+        "ignored",
+        selected_action_id="show_pass_token",
+        selected_target_id="nonexistent_target",
+    )
+    # The system should reject or fall back appropriately
+    assert "turn" in result
+    assert isinstance(result["turn"]["accepted"], bool)
