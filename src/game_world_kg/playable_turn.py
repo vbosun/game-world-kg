@@ -11,22 +11,7 @@ from .llm import ActionCandidate
 from .projector import StateProjector
 from .scene_renderer import SceneRenderer
 
-_GROWTH_ATTRS: dict[str, str] = {
-    "talk": "skill.social",
-    "work": "skill.labor",
-    "move": "skill.exploration",
-    "buy": "skill.commerce",
-    "sell": "skill.commerce",
-    "gather": "skill.knowledge",
-    "visit": "skill.health",
-    "inspect": "skill.perception",
-    "bribe": "skill.social",
-    "ask": "skill.social",
-    "steal": "skill.stealth",
-    "trade": "skill.commerce",
-    "fight": "skill.combat",
-    "heal": "skill.health",
-}
+_GROWTH_LINES = ["identity", "relationship", "knowledge", "permission", "skill"]
 
 if TYPE_CHECKING:
     from .service import GameWorldService
@@ -69,10 +54,11 @@ class PlayableTurnKernel:
         else:
             turn_result = self._run_bound_turn(world_id, player_input, bound)
             if turn_result.get("accepted"):
-                growth_event = self._record_growth(world_id, bound.action_id)
+                main_turn_id = turn_result.get("turn_id")
+                growth_event = self._record_growth(world_id, bound.action_id, turn_result.get("events", []), parent_turn_id=main_turn_id)
                 if growth_event is not None:
                     turn_result["events"] = [*turn_result.get("events", []), growth_event]
-                npc_activity = self._tick_foreground_npcs(world_id)
+                npc_activity = self._tick_foreground_npcs(world_id, parent_turn_id=main_turn_id)
                 turn_result["npc_activity"] = npc_activity
                 turn_result["events"] = [*turn_result.get("events", []), *_npc_events(npc_activity)]
         after = self.service.state(world_id)
@@ -128,12 +114,15 @@ class PlayableTurnKernel:
         for aff in affordances:
             if aff["action_id"] == candidate.action_id and (aff.get("target_id") or None) == (candidate.target_id or None):
                 return aff
-        for aff in affordances:
-            if aff["action_id"] == candidate.action_id:
-                return aff
+        # Only allow action_id-only match when candidate has NO target_id.
+        # When the LLM returns a target_id, it must match exactly.
+        if not candidate.target_id:
+            for aff in affordances:
+                if aff["action_id"] == candidate.action_id:
+                    return aff
         return None
 
-    def _tick_foreground_npcs(self, world_id: str) -> dict[str, Any]:
+    def _tick_foreground_npcs(self, world_id: str, parent_turn_id: str | None = None) -> dict[str, Any]:
         npc_activity = self.service.tick_world(world_id, 3)
         if _npc_events(npc_activity) or not npc_activity.get("results"):
             return npc_activity
@@ -144,12 +133,18 @@ class PlayableTurnKernel:
         with self.service._lock:
             with transaction(self.service.conn):
                 log = EventLog(self.service.conn)
-                turn_id = log.create_turn(world_id, f"foreground_npc_observe:{npc_id}", "Foreground NPC observes the player's move.")
-                turn = self.service.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+                if parent_turn_id:
+                    turn = self.service.conn.execute("SELECT * FROM turns WHERE id = ?", (parent_turn_id,)).fetchone()
+                    turn_id = parent_turn_id
+                    turn_index = turn["turn_index"]
+                else:
+                    turn_id = log.create_turn(world_id, f"foreground_npc_observe:{npc_id}", "Foreground NPC observes the player's move.")
+                    turn = self.service.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+                    turn_index = turn["turn_index"]
                 event = log.append(
                     world_id,
                     turn_id,
-                    turn["turn_index"],
+                    turn_index,
                     "NPC_ACTION",
                     npc_id,
                     {"action_id": "observe", "target_id": "player", "reason": first.get("reason") or "foreground_reaction"},
@@ -227,27 +222,101 @@ class PlayableTurnKernel:
         StateProjector(self.service.conn).apply_event(event)
         return {"id": event.id, "event_type": event.event_type, "actor_id": event.actor_id, "participants": event.participants, "payload": event.payload}
 
-    def _record_growth(self, world_id: str, action_id: str) -> dict[str, Any] | None:
-        attr = _growth_attr_for_action(action_id)
-        if attr is None:
+    def _record_growth(self, world_id: str, action_id: str, turn_events: list[dict[str, Any]], parent_turn_id: str | None = None) -> dict[str, Any] | None:
+        """Record 4-line growth: identity, relationship, knowledge, permission (+ skill as secondary)."""
+        growth_lines: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for event in turn_events:
+            payload = event.get("payload", {})
+            event_type = event.get("event_type", "")
+
+            # Identity: identity tag changes
+            if event_type == "SET_STATE" and payload.get("attr") == "identity_tags":
+                new_tags = payload.get("value", [])
+                if isinstance(new_tags, list):
+                    for tag in new_tags:
+                        if tag not in seen:
+                            growth_lines.append({"line": "identity", "tag": tag, "event_type": "identity_growth"})
+                            seen.add(tag)
+
+            # Relationship: relation changes
+            if event_type == "CHANGE_RELATION":
+                rel_key = f"{payload.get('src')}:{payload.get('rel')}:{payload.get('dst')}"
+                if rel_key not in seen:
+                    growth_lines.append({
+                        "line": "relationship",
+                        "src": payload.get("src"),
+                        "rel": payload.get("rel"),
+                        "dst": payload.get("dst"),
+                        "delta": payload.get("delta", 0),
+                        "event_type": "relationship_growth",
+                    })
+                    seen.add(rel_key)
+
+            # Knowledge: new clues or player-scoped memories
+            if event_type == "SET_STATE" and payload.get("attr") == "known_clues":
+                new_clues = payload.get("value", [])
+                if isinstance(new_clues, list):
+                    for clue in new_clues:
+                        if clue not in seen:
+                            growth_lines.append({"line": "knowledge", "clue": clue, "event_type": "knowledge_growth"})
+                            seen.add(clue)
+            if event_type == "ADD_MEMORY" and payload.get("truth_scope") == "player":
+                mem = payload.get("memory_text", "")
+                if mem and mem not in seen:
+                    growth_lines.append({"line": "knowledge", "clue": mem[:80], "event_type": "knowledge_growth"})
+                    seen.add(mem)
+
+            # Permission: permission grants
+            if event_type == "SET_STATE" and payload.get("attr") == "permissions":
+                new_perms = payload.get("value", [])
+                if isinstance(new_perms, list):
+                    for perm in new_perms:
+                        if perm not in seen:
+                            growth_lines.append({"line": "permission", "permission": perm, "event_type": "permission_growth"})
+                            seen.add(perm)
+
+        # Skill growth (secondary)
+        skill_attr = _growth_skill_for_action(action_id)
+        if skill_attr:
+            growth_lines.append({"line": "skill", "attr": skill_attr, "delta": 1, "event_type": "skill_growth"})
+
+        if not growth_lines:
             return None
+
         state = self.service.state(world_id)
-        current = state.get("player", {}).get(attr, 0)
-        new_value = (current if isinstance(current, (int, float)) else 0) + 1
+        player = state.get("player", {})
+
+        # Build aggregate deltas
+        deltas: list[StateDelta] = []
+        for line in growth_lines:
+            if line["line"] == "skill":
+                attr = line["attr"]
+                current = player.get(attr, 0)
+                new_value = (current if isinstance(current, (int, float)) else 0) + 1
+                deltas.append(StateDelta(entity_id="player", attr=attr, old_value=current, new_value=new_value))
+
         with self.service._lock:
             with transaction(self.service.conn):
                 log = EventLog(self.service.conn)
-                turn_id = log.create_turn(world_id, f"growth:{action_id}", "Player growth from action.")
-                turn = self.service.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+                if parent_turn_id:
+                    turn = self.service.conn.execute("SELECT * FROM turns WHERE id = ?", (parent_turn_id,)).fetchone()
+                    turn_id = parent_turn_id
+                    turn_index = turn["turn_index"]
+                else:
+                    turn_id = log.create_turn(world_id, f"growth:{action_id}", "Player growth from action.")
+                    turn = self.service.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+                    turn_index = turn["turn_index"]
                 event = log.append(
                     world_id,
                     turn_id,
-                    turn["turn_index"],
+                    turn_index,
                     "PLAYER_GROWTH",
                     "player",
-                    {"attr": attr, "delta": 1, "new_value": new_value, "action_id": action_id},
+                    {"action_id": action_id, "growth_lines": growth_lines},
                     participants=["player"],
-                    state_deltas=[StateDelta(entity_id="player", attr=attr, old_value=current, new_value=new_value)],
+                    state_deltas=deltas,
                 )
                 StateProjector(self.service.conn).apply_event(event)
         return {"id": event.id, "event_type": event.event_type, "actor_id": event.actor_id, "participants": event.participants, "payload": event.payload}
@@ -365,8 +434,21 @@ class PlayableTurnKernel:
         }
 
 
-def _growth_attr_for_action(action_id: str) -> str | None:
-    for pattern, attr in _GROWTH_ATTRS.items():
+_SKILL_PATTERNS: dict[str, str] = {
+    "talk": "skill.social", "ask": "skill.social", "bribe": "skill.social", "persuade": "skill.social",
+    "work": "skill.labor", "build": "skill.labor", "craft": "skill.labor",
+    "move": "skill.exploration",
+    "buy": "skill.commerce", "sell": "skill.commerce", "trade": "skill.commerce",
+    "gather": "skill.knowledge",
+    "inspect": "skill.perception",
+    "steal": "skill.stealth", "sneak": "skill.stealth",
+    "fight": "skill.combat", "attack": "skill.combat",
+    "heal": "skill.health",
+}
+
+
+def _growth_skill_for_action(action_id: str) -> str | None:
+    for pattern, attr in _SKILL_PATTERNS.items():
         if pattern in action_id:
             return attr
     return None

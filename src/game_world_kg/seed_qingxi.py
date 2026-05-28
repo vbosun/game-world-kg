@@ -233,9 +233,48 @@ def _initial_memories() -> list[dict[str, Any]]:
 
 def _initial_tensions() -> list[dict[str, Any]]:
     return [
-        {"id": "qingxi_herb_shortage", "tension_type": "resource_shortage", "description": "药荒让药铺缺货、病人增多，孙娘急需可靠帮手。", "affected_entities": ["herb_shop", "sun_niang", "spirit_field"], "evidence": [{"source_type": "state", "entity_id": "herb_shop", "attr": "herb_stock", "value": "low"}], "suggested_actions": ["help_sort_herbs", "talk_to_sun_niang"], "priority": 0.9},
-        {"id": "qingxi_outer_recruitment", "tension_type": "opportunity", "description": "青木宗外门招外役，林砚只愿给可靠的人试工牌。", "affected_entities": ["outer_sect", "lin_yan", "trial_token"], "evidence": [{"source_type": "state", "entity_id": "outer_sect", "attr": "reputation.player", "value": 0}], "suggested_actions": ["request_outer_trial", "share_clue_with_lin"], "priority": 0.75},
-        {"id": "qingxi_white_shadow", "tension_type": "rumor_unresolved", "description": "夜庙白影牵着偷采、藏账和夜路风险，传闻半真半假。", "affected_entities": ["ruined_temple", "xiao_ni", "lu_san", "temple_ash"], "evidence": [{"source_type": "memory", "owner_id": "town_public", "text": "夜庙白影"}], "suggested_actions": ["ask_white_shadow_rumor", "inspect_ruined_temple"], "priority": 0.85},
+        {
+            "id": "qingxi_herb_shortage",
+            "tension_type": "resource_shortage",
+            "description": "药荒让药铺缺货、病人增多，孙娘急需可靠帮手。",
+            "affected_entities": ["herb_shop", "sun_niang", "spirit_field"],
+            "evidence": [{"source_type": "state", "entity_id": "herb_shop", "attr": "herb_stock", "value": "low"}],
+            "suggested_actions": ["help_sort_herbs", "talk_to_sun_niang"],
+            "priority": 0.9,
+            "stake": "药铺倒闭，镇民无药可用",
+            "deadline_turn": 15,
+            "sponsors": ["sun_niang"],
+            "blockers": ["lu_san"],
+            "player_touchpoints": ["talk_to_sun_niang", "help_sort_herbs", "share_clue_with_lin"],
+        },
+        {
+            "id": "qingxi_outer_recruitment",
+            "tension_type": "opportunity",
+            "description": "青木宗外门招外役，林砚只愿给可靠的人试工牌。",
+            "affected_entities": ["outer_sect", "lin_yan", "trial_token"],
+            "evidence": [{"source_type": "state", "entity_id": "outer_sect", "attr": "reputation.player", "value": 0}],
+            "suggested_actions": ["request_outer_trial", "share_clue_with_lin"],
+            "priority": 0.75,
+            "stake": "成为外门杂役，获得庇护",
+            "deadline_turn": 20,
+            "sponsors": ["lin_yan"],
+            "blockers": ["lu_san"],
+            "player_touchpoints": ["talk_to_lin_yan", "request_outer_trial", "share_clue_with_lin"],
+        },
+        {
+            "id": "qingxi_white_shadow",
+            "tension_type": "rumor_unresolved",
+            "description": "夜庙白影牵着偷采、藏账和夜路风险，传闻半真半假。",
+            "affected_entities": ["ruined_temple", "xiao_ni", "lu_san", "temple_ash"],
+            "evidence": [{"source_type": "memory", "owner_id": "town_public", "text": "夜庙白影"}],
+            "suggested_actions": ["ask_white_shadow_rumor", "inspect_ruined_temple"],
+            "priority": 0.85,
+            "stake": "破庙白影真相可能颠覆小镇",
+            "deadline_turn": None,
+            "sponsors": ["jiao_qi"],
+            "blockers": ["xiao_ni"],
+            "player_touchpoints": ["talk_to_jiao_qi", "inspect_ruined_temple", "ask_white_shadow_rumor"],
+        },
     ]
 
 

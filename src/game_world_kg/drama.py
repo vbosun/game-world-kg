@@ -60,6 +60,9 @@ class DramaManager:
         foreground = scored[: max(1, min(limit, 3))]
         return {
             "world_id": world_id,
+            "main_tension": scored[0] if scored else None,
+            "side_tension": scored[1] if len(scored) > 1 else None,
+            "ambient_noise": _build_ambient(scored[2:], current_turn),
             "foreground_tensions": foreground,
             "player_interest": {
                 "recent_locations": interest.recent_locations,
@@ -142,3 +145,20 @@ def _ambient_event(tensions: list[dict[str, Any]], current_turn: int = 0) -> dic
         "summary": (tension.get("reason") or tension.get("description", "有人低声谈起当前局势。")) + urgency,
         "urgency": urgency.strip() if urgency else None,
     }
+
+
+def _build_ambient(tensions: list[dict[str, Any]], current_turn: int = 0) -> list[dict[str, Any]]:
+    """Build ambient noise from remaining tensions (beyond main + side)."""
+    ambient: list[dict[str, Any]] = []
+    for tension in tensions:
+        item: dict[str, Any] = {
+            "tension_id": tension.get("tension_id") or tension.get("id"),
+            "summary": tension.get("description", ""),
+            "priority": tension.get("priority", 0),
+        }
+        deadline = tension.get("deadline_turn")
+        if deadline is not None and isinstance(deadline, (int, float)):
+            remaining = max(0, int(deadline) - current_turn)
+            item["turns_remaining"] = remaining
+        ambient.append(item)
+    return ambient

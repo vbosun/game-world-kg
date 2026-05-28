@@ -21,6 +21,9 @@ SUPPORTED_PREDICATES = {
     "connected_location",
     "edge_unblocked",
     "scope_allowed",
+    "has_identity_tag",
+    "has_permission",
+    "has_knowledge",
 }
 SUPPORTED_EFFECTS = {
     "transfer_item",
@@ -348,6 +351,16 @@ def _preflight_structural_issues(candidate: dict[str, Any]) -> list[ValidationIs
             if "priority" not in goal:
                 issues.append(ValidationIssue("character_goal_missing_priority", f"{path}.priority", "Character goal must include priority."))
 
+    # P1-06: player_start checks
+    player_start = candidate.get("player_start")
+    if isinstance(player_start, dict) and "location_id" not in player_start:
+        issues.append(ValidationIssue("player_start_missing_location_id", "player_start.location_id", "player_start must include location_id."))
+
+    # P1-06: location checks
+    for loc_index, location in enumerate(candidate.get("locations", []) or []):
+        if isinstance(location, dict) and "stable_key" not in location:
+            issues.append(ValidationIssue("location_missing_stable_key", f"locations[{loc_index}].stable_key", "Location must include stable_key."))
+
     for faction_index, faction in enumerate(candidate.get("factions", []) or []):
         path = f"factions[{faction_index}]"
         if not isinstance(faction, dict):
@@ -359,6 +372,10 @@ def _preflight_structural_issues(candidate: dict[str, Any]) -> list[ValidationIs
             issues.append(ValidationIssue("faction_missing_goals", f"{path}.goals", "Faction must include goals."))
         if "relations" not in faction:
             issues.append(ValidationIssue("faction_missing_relations", f"{path}.relations", "Faction must include relations."))
+        else:
+            for rel_index, relation in enumerate(faction.get("relations", []) or []):
+                if isinstance(relation, dict) and "relation" not in relation:
+                    issues.append(ValidationIssue("faction_relation_missing_relation", f"{path}.relations[{rel_index}].relation", "Faction relation must include 'relation' field."))
 
     for resource_index, resource in enumerate(candidate.get("resources", []) or []):
         path = f"resources[{resource_index}]"
@@ -424,6 +441,8 @@ def _preflight_structural_issues(candidate: dict[str, Any]) -> list[ValidationIs
     for quest_index, quest in enumerate(candidate.get("initial_quests", []) or []):
         if not isinstance(quest, dict):
             continue
+        if "tension_id" not in quest:
+            issues.append(ValidationIssue("quest_missing_tension_id", f"initial_quests[{quest_index}].tension_id", "Quest must reference a tension_id."))
         for objective_index, objective in enumerate(quest.get("objectives", []) or []):
             if not isinstance(objective, dict):
                 issues.append(

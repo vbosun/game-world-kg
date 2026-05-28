@@ -161,6 +161,42 @@ def _migrate(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_world_specs_world ON world_specs(world_id, spec_hash)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bootstrap_runs_world ON bootstrap_runs(world_id, spec_hash)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS worldspec_raw_drafts (
+            raw_id TEXT PRIMARY KEY,
+            trace_id TEXT,
+            idea TEXT NOT NULL,
+            provider TEXT,
+            model TEXT,
+            raw_text TEXT NOT NULL,
+            extracted_json_text TEXT,
+            json_parse_status TEXT,
+            json_parse_error TEXT,
+            status TEXT NOT NULL DEFAULT 'created',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS worldspec_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            raw_id TEXT,
+            trace_id TEXT,
+            world_id TEXT,
+            spec_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            validation_report_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(raw_id) REFERENCES worldspec_raw_drafts(raw_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_worldspec_raw_drafts_trace ON worldspec_raw_drafts(trace_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_worldspec_candidates_raw ON worldspec_candidates(raw_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_worldspec_candidates_world ON worldspec_candidates(world_id)")
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

@@ -166,6 +166,89 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def v1_worldspec_debug_trace(trace_id: str) -> dict[str, Any]:
         return _handle(lambda: service.worldspec_generation_trace(trace_id))
 
+    # P1: Raw draft endpoints
+    @app.get("/v1/worldspec/raw/latest")
+    def v1_worldspec_raw_latest() -> dict[str, Any]:
+        from .worldspec_draft_repository import RawDraftRepository
+        return _handle(lambda: RawDraftRepository(service.conn).latest() or {})
+
+    @app.get("/v1/worldspec/raw/{raw_id}")
+    def v1_worldspec_raw_get(raw_id: str) -> dict[str, Any]:
+        from .worldspec_draft_repository import RawDraftRepository
+        def _get():
+            result = RawDraftRepository(service.conn).get(raw_id)
+            if result is None:
+                raise KeyError(raw_id)
+            return result
+        return _handle(_get)
+
+    @app.post("/v1/worldspec/raw/{raw_id}/parse")
+    def v1_worldspec_raw_parse(raw_id: str) -> dict[str, Any]:
+        from .worldspec_draft_repository import CandidateRepository, RawDraftRepository
+        def _do():
+            repo = RawDraftRepository(service.conn)
+            draft = repo.get(raw_id)
+            if draft is None:
+                raise KeyError(raw_id)
+            generator = WorldSpecGenerator(service.llm_client)
+            from .worldspec import WorldIntentExtractor
+            intent = WorldIntentExtractor().extract(draft["idea"])
+            spec = generator.generate(draft["idea"])
+            if spec is None:
+                return {"raw_id": raw_id, "parse_success": False, "error": generator.last_error}
+            report = service.validate_worldspec(spec.model_dump(mode="json"))
+            candidate_id = CandidateRepository(service.conn).save(
+                raw_id=raw_id,
+                trace_id=draft.get("trace_id"),
+                world_id=spec.world_id,
+                spec_json=spec.model_dump(mode="json"),
+                status="validated" if report.get("valid") else "rejected",
+                validation_report_json=report,
+            )
+            return {"raw_id": raw_id, "candidate_id": candidate_id, "parse_success": True, "validation_report": report}
+        return _handle(_do)
+
+    # P1: Candidate endpoints
+    @app.get("/v1/worldspec/candidates/{candidate_id}")
+    def v1_worldspec_candidate_get(candidate_id: str) -> dict[str, Any]:
+        from .worldspec_draft_repository import CandidateRepository
+        def _get():
+            result = CandidateRepository(service.conn).get(candidate_id)
+            if result is None:
+                raise KeyError(candidate_id)
+            return result
+        return _handle(_get)
+
+    @app.post("/v1/worldspec/candidates/{candidate_id}/validate")
+    def v1_worldspec_candidate_validate(candidate_id: str) -> dict[str, Any]:
+        import json as _json
+        from .worldspec_draft_repository import CandidateRepository
+        def _do():
+            repo = CandidateRepository(service.conn)
+            candidate = repo.get(candidate_id)
+            if candidate is None:
+                raise KeyError(candidate_id)
+            spec = _json.loads(candidate["spec_json"])
+            report = service.validate_worldspec(spec)
+            repo.update_validation(candidate_id, report, status="validated" if report.get("valid") else "rejected")
+            return {"candidate_id": candidate_id, "validation_report": report}
+        return _handle(_do)
+
+    @app.post("/v1/worldspec/candidates/{candidate_id}/submit-repaired-json")
+    def v1_worldspec_candidate_submit_repaired(candidate_id: str, request: WorldSpecPayloadRequest) -> dict[str, Any]:
+        from .worldspec_draft_repository import CandidateRepository
+        from .worldspec_runtime import WorldSpecNormalizer
+        def _do():
+            repo = CandidateRepository(service.conn)
+            candidate = repo.get(candidate_id)
+            if candidate is None:
+                raise KeyError(candidate_id)
+            normalized = WorldSpecNormalizer().normalize(request.spec)
+            report = service.validate_worldspec(normalized)
+            repo.submit_repaired_json(candidate_id, normalized, report)
+            return {"candidate_id": candidate_id, "validation_report": report}
+        return _handle(_do)
+
     @app.post("/v1/worldspec/bootstrap")
     def v1_worldspec_bootstrap(request: WorldSpecPayloadRequest) -> dict[str, Any]:
         return _handle(lambda: service.bootstrap_worldspec(request.spec))

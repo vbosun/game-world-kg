@@ -4,7 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from .action_template import ActionTemplateEngine, ActionResolver, ActionTemplateStore
+from .action_template import ActionTemplateEngine, ActionTemplateStore, validate_and_resolve_action
 from .events import EventLog, StateDelta
 from .graph import WorldGraph
 
@@ -76,7 +76,8 @@ class NPCPlanner:
         log = EventLog(self.conn)
         turn_id = log.create_turn(world_id, f"npc_tick:{npc_id}:{action['action_id']}")
         row = self.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
-        resolution = ActionResolver(self.conn).resolve(
+        resolution = validate_and_resolve_action(
+            self.conn,
             world_id,
             turn_id,
             row["turn_index"],
@@ -170,10 +171,23 @@ class NPCPlanner:
         if not factions:
             return None
         faction_id = factions[hash(self._current_turn_index(world_id)) % len(factions)]
+        turn_index = self._current_turn_index(world_id)
+        log = EventLog(self.conn)
+        turn_id = log.create_turn(world_id, f"background:{faction_id}", "Background faction activity.")
+        event = log.append(
+            world_id,
+            turn_id,
+            turn_index,
+            "FACTION_ACTIVITY",
+            faction_id,
+            {"summary": f"Faction {faction_id} exerts pressure.", "faction_id": faction_id, "turn_index": turn_index},
+            participants=[faction_id],
+        )
         return {
             "tier": "background",
             "faction_id": faction_id,
-            "summary": f"Background activity from {faction_id} at turn {self._current_turn_index(world_id)}.",
+            "summary": f"Background activity from {faction_id} at turn {turn_index}.",
+            "event": {"id": event.id, "event_type": event.event_type, "payload": event.payload},
         }
 
     def _active_npcs(self, world_id: str) -> list[str]:
@@ -201,6 +215,7 @@ class NPCPlanner:
         if not loc:
             return []
         memories = self.service.recall_memory(world_id, npc_id, "rumor target", 3)
+        memories = [m for m in memories if m.get("truth_scope") in {"rumor", "npc"}]
         if not memories:
             return []
         others = [

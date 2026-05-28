@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import enum
 import sqlite3
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -8,6 +10,13 @@ from uuid import uuid4
 from .db import from_json, to_json, utc_now
 from .events import EventLog, EventRecord
 from .projector import StateProjector, delta
+
+
+class ActionOutcome(enum.Enum):
+    FULL_SUCCESS = "full_success"
+    SUCCESS_WITH_COST = "success_with_cost"
+    FAIL_FORWARD = "fail_forward"
+    CATASTROPHIC_FAILURE = "catastrophic_failure"
 
 
 @dataclass(frozen=True)
@@ -30,6 +39,8 @@ class ActionResolution:
     reason: str
     narration: str
     events: list[EventRecord]
+    outcome: ActionOutcome = ActionOutcome.FULL_SUCCESS
+    costs: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ActionTemplateStore:
@@ -132,6 +143,15 @@ class PredicateEvaluator:
             return self._edge_unblocked(world_id, current, target)
         if kind == "scope_allowed":
             return predicate.get("scope", "canonical") in {"canonical", "player", "npc", "faction", "rumor", "candidate", "rejected"}
+        if kind == "has_identity_tag":
+            tags = self._state(world_id, predicate["entity"], "identity_tags", bindings, predicate.get("scope", "canonical")) or []
+            return predicate["tag"] in tags
+        if kind == "has_permission":
+            permissions = self._state(world_id, predicate["entity"], "permissions", bindings, predicate.get("scope", "canonical")) or []
+            return predicate["permission"] in permissions
+        if kind == "has_knowledge":
+            clues = self._state(world_id, predicate["entity"], "known_clues", bindings, predicate.get("scope", "canonical")) or []
+            return predicate["clue"] in clues
         raise ValueError(f"unknown predicate type: {kind}")
 
     def failure_reason(self, predicate: dict[str, Any]) -> str:
@@ -141,9 +161,15 @@ class PredicateEvaluator:
         return self.state.get_state(world_id, self._bind(entity, bindings), attr, scope)
 
     @staticmethod
-    def _bind(value: str, bindings: dict[str, str]) -> str:
+    def _bind(value: str, bindings: dict[str, str], strict: bool = False) -> str:
         if value.startswith("$"):
-            return bindings.get(value[1:], "")
+            resolved = bindings.get(value[1:])
+            if resolved is None:
+                warnings.warn(f"Unresolvable variable {value} in predicate binding")
+                if strict:
+                    raise ValueError(f"Unresolvable variable {value} in predicate binding")
+                return ""
+            return resolved
         return value
 
     def _locations_connected(self, world_id: str, current: str | None, target: str) -> bool:
@@ -304,9 +330,15 @@ class EffectExecutor:
         raise ValueError(f"unknown effect type: {kind}")
 
     @staticmethod
-    def _bind(value: str, bindings: dict[str, str]) -> str:
+    def _bind(value: str, bindings: dict[str, str], strict: bool = False) -> str:
         if value.startswith("$"):
-            return bindings.get(value[1:], "")
+            resolved = bindings.get(value[1:])
+            if resolved is None:
+                warnings.warn(f"Unresolvable variable {value} in effect binding")
+                if strict:
+                    raise ValueError(f"Unresolvable variable {value} in effect binding")
+                return ""
+            return resolved
         return value
 
 
@@ -327,16 +359,91 @@ class ActionResolver:
         actor_id: str = "player",
         target_id: str | None = None,
     ) -> ActionResolution | None:
-        template = self.templates.get(world_id, action_id)
-        if template is None:
-            return None
-        bindings = {"actor": actor_id, "target": target_id or template.target_id or ""}
-        for predicate in template.preconditions:
-            if not self.predicates.evaluate(world_id, predicate, bindings):
-                reason = self.predicates.failure_reason(predicate)
-                return ActionResolution(action_id, False, reason, reason, [])
-        events = self.effects.execute(world_id, turn_id, turn_index, actor_id, template.effects, bindings, evidence)
-        return ActionResolution(action_id, True, template.reason, template.reason, events)
+        return validate_and_resolve_action(
+            self.conn, world_id, turn_id, turn_index, action_id, evidence, actor_id, target_id,
+        )
+
+
+def validate_and_resolve_action(
+    conn: sqlite3.Connection,
+    world_id: str,
+    turn_id: str,
+    turn_index: int,
+    action_id: str,
+    evidence: list[dict[str, Any]],
+    actor_id: str = "player",
+    target_id: str | None = None,
+) -> ActionResolution | None:
+    """Shared action validation path for both player and NPC actions.
+
+    Looks up the ActionTemplate, evaluates preconditions, and executes effects.
+    Does NOT include hardcoded demo handlers or keyword parsing.
+    """
+    store = ActionTemplateStore(conn)
+    predicates = PredicateEvaluator(conn)
+    effects = EffectExecutor(conn)
+    template = store.get(world_id, action_id)
+    if template is None:
+        return None
+    bindings = {"actor": actor_id, "target": target_id or template.target_id or ""}
+    for predicate in template.preconditions:
+        if not predicates.evaluate(world_id, predicate, bindings):
+            reason = predicates.failure_reason(predicate)
+            return ActionResolution(action_id, False, reason, reason, [])
+    events = effects.execute(world_id, turn_id, turn_index, actor_id, template.effects, bindings, evidence)
+    outcome = _compute_outcome(conn, world_id, actor_id, target_id, template, bindings)
+    return ActionResolution(action_id, True, template.reason, template.reason, events, outcome=outcome)
+
+
+def _compute_outcome(
+    conn: sqlite3.Connection,
+    world_id: str,
+    actor_id: str,
+    target_id: str | None,
+    template: ActionTemplate,
+    bindings: dict[str, str],
+) -> ActionOutcome:
+    risk = template.risk
+    state = StateProjector(conn)
+
+    # Determine relevant skill based on action_id
+    skill_map = {
+        "fight": "skill.combat", "attack": "skill.combat",
+        "steal": "skill.stealth", "sneak": "skill.stealth",
+        "talk": "skill.social", "bribe": "skill.social", "persuade": "skill.social",
+        "work": "skill.labor", "build": "skill.labor",
+        "gather": "skill.knowledge", "inspect": "skill.perception",
+    }
+    skill_attr = "skill.social"
+    for pattern, attr in skill_map.items():
+        if pattern in template.action_id:
+            skill_attr = attr
+            break
+    skill_level = state.get_state(world_id, actor_id, skill_attr) or 0
+
+    # Check relationship with target
+    relation_bonus = 0
+    if target_id:
+        trust = state.get_state(world_id, target_id, f"trust.{actor_id}") or 0
+        relation_bonus = min(trust // 2, 3)
+
+    # Risk matrix:
+    effective = skill_level + relation_bonus
+    if risk == "low":
+        return ActionOutcome.FULL_SUCCESS
+    elif risk == "medium":
+        if effective >= 2:
+            return ActionOutcome.FULL_SUCCESS
+        else:
+            return ActionOutcome.SUCCESS_WITH_COST
+    elif risk == "high":
+        if effective >= 4:
+            return ActionOutcome.SUCCESS_WITH_COST
+        elif effective >= 2:
+            return ActionOutcome.FAIL_FORWARD
+        else:
+            return ActionOutcome.CATASTROPHIC_FAILURE
+    return ActionOutcome.FULL_SUCCESS
 
 
 class ActionTemplateEngine:
@@ -452,6 +559,33 @@ class ActionTemplateEngine:
                     }
                 )
         return affordances
+
+
+class ActionTemplateCompiler:
+    """Validates variable references in ActionTemplate preconditions/effects."""
+
+    @staticmethod
+    def _collect_variables(obj: dict[str, Any], variables: set[str], errors: list[str], path: str) -> None:
+        for key, value in obj.items():
+            if isinstance(value, str) and value.startswith("$"):
+                var_name = value[1:]
+                if value not in variables:
+                    errors.append(f"{path}.{key}: unresolved variable {value}")
+            elif isinstance(value, dict):
+                ActionTemplateCompiler._collect_variables(value, variables, errors, f"{path}.{key}")
+            elif isinstance(value, list):
+                for i, item in enumerate(value):
+                    if isinstance(item, dict):
+                        ActionTemplateCompiler._collect_variables(item, variables, errors, f"{path}.{key}[{i}]")
+
+    def compile(self, template: ActionTemplate) -> list[str]:
+        errors: list[str] = []
+        variables = {"$actor", "$target"} | {f"${k}" for k in template.arg_schema}
+        for i, pred in enumerate(template.preconditions):
+            self._collect_variables(pred, variables, errors, f"preconditions[{i}]")
+        for i, effect in enumerate(template.effects):
+            self._collect_variables(effect, variables, errors, f"effects[{i}]")
+        return errors
 
 
 def _row_to_template(row: sqlite3.Row) -> ActionTemplate:

@@ -28,6 +28,7 @@ from .rules import RuleEngine
 from .seed import DEMO_WORLD_ID, seed_demo_world
 from .tension import TensionScanner
 from .worldspec import WorldSpec, WorldSpecGenerator, WorldSpecRepairer, WorldSpecValidator
+from .worldspec_draft_repository import CandidateRepository, RawDraftRepository
 
 
 class GameWorldService:
@@ -424,10 +425,41 @@ class GameWorldService:
                 )
                 status = "validated" if report["valid"] else "rejected"
                 spec_id = WorldSpecRepository(self.conn).save(spec, status, report)
+
+                # P1: Save raw draft and candidate
+                raw_repo = RawDraftRepository(self.conn)
+                json_parse_error = getattr(generator, "last_json_parse_error", None)
+                raw_id = raw_repo.save(
+                    trace_id=trace_id,
+                    idea=idea,
+                    provider=getattr(getattr(generator, "llm_client", None), "provider", None),
+                    model=getattr(getattr(generator, "llm_client", None), "model_name", None),
+                    raw_text=raw_llm_response or "",
+                    json_parse_status="failed" if json_parse_error else "parsed",
+                    json_parse_error=json_parse_error,
+                    status="adopted" if report["valid"] else "raw_received",
+                )
+                if generator.last_candidate_payload:
+                    raw_repo.update_parse_result(
+                        raw_id,
+                        extracted_json_text=json.dumps(generator.last_candidate_payload, ensure_ascii=False),
+                        json_parse_status="parsed",
+                    )
+                cand_repo = CandidateRepository(self.conn)
+                candidate_id = cand_repo.save(
+                    raw_id=raw_id,
+                    trace_id=trace_id,
+                    world_id=spec.world_id,
+                    spec_json=adopted_spec,
+                    status=status,
+                    validation_report_json=report,
+                )
             return {
                 "world_spec_id": spec_id,
                 "world_id": spec.world_id,
                 "trace_id": trace_id,
+                "raw_id": raw_id,
+                "candidate_id": candidate_id,
                 "source": generator.last_source,
                 "spec": spec.model_dump(mode="json"),
                 "llm_candidate": generator.last_candidate_payload,

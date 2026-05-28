@@ -6,14 +6,45 @@ from typing import Any
 class FeedbackRenderer:
     def render(self, turn_result: dict[str, Any], before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> dict[str, Any]:
         changes = self.changes(turn_result.get("events", []), before, after)
+        layers = self._build_layers(changes, turn_result)
         return {
             "accepted": turn_result.get("accepted", False),
             "action_id": turn_result.get("action_id"),
             "narration": turn_result.get("narration", ""),
             "reason": turn_result.get("reason", ""),
+            "outcome": turn_result.get("outcome", "full_success"),
             "changes": changes,
+            "layers": layers,
             "next_hooks": self.next_hooks(turn_result.get("affordances", []), changes),
         }
+
+    @staticmethod
+    def _build_layers(changes: list[dict[str, Any]], turn_result: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        """Group changes into 4 layers: narrative, mechanics, social, world."""
+        narrative: list[dict[str, Any]] = []
+        mechanics: list[dict[str, Any]] = []
+        social: list[dict[str, Any]] = []
+        world: list[dict[str, Any]] = []
+
+        for change in changes:
+            t = change.get("type", "")
+            if t in ("knowledge_change", "witness", "world_event"):
+                narrative.append(change)
+            elif t in ("state_change", "resource_change", "growth", "permission_change"):
+                mechanics.append(change)
+            elif t in ("relationship_change", "identity_change"):
+                social.append(change)
+            elif t in ("location_change",):
+                world.append(change)
+            else:
+                world.append(change)
+
+        # Add outcome info to narrative layer if applicable
+        outcome = turn_result.get("outcome")
+        if outcome and outcome != "full_success":
+            narrative.insert(0, {"type": "outcome", "outcome": outcome, "label": f"行动结果: {outcome}"})
+
+        return {"narrative": narrative, "mechanics": mechanics, "social": social, "world": world}
 
     def rejection(self, player_input: str, affordances: list[dict[str, Any]], reason: str) -> dict[str, Any]:
         suggestions = affordances[:3]
