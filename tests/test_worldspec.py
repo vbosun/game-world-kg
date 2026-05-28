@@ -15,8 +15,8 @@ from game_world_kg.worldspec_safe import WorldSpecGenerator as SafeWorldSpecGene
 
 
 class InvalidWorldSpecLLM:
-    def complete_json(self, messages, *, temperature=0, timeout_seconds=None):
-        return {
+    def __init__(self) -> None:
+        self.payload = {
             "world_id": "flower_house_reminiscence",
             "title": "花楼旧梦",
             "genre": "village",
@@ -32,8 +32,11 @@ class InvalidWorldSpecLLM:
             "initial_quests": [],
         }
 
+    def complete_json(self, messages, *, temperature=0, timeout_seconds=None):
+        return self.payload
+
     def complete_text(self, messages, *, temperature=0.4, timeout_seconds=None):
-        return "fallback narration"
+        return json.dumps(self.payload, ensure_ascii=False)
 
 
 class ValidWorldSpecLLM:
@@ -49,7 +52,37 @@ class ValidWorldSpecLLM:
         return payload
 
     def complete_text(self, messages, *, temperature=0.4, timeout_seconds=None):
-        return "fallback narration"
+        self.timeout_seconds = timeout_seconds
+        payload = sample_world_spec("village").model_dump(mode="json")
+        self.last_raw_text = json.dumps(payload, ensure_ascii=False)
+        return self.last_raw_text
+
+
+class BrokenJsonWorldSpecLLM:
+    def __init__(self) -> None:
+        valid = json.dumps(sample_world_spec("village").model_dump(mode="json"), ensure_ascii=False, indent=2)
+        self.raw = valid.replace('",\n  "title"', '"\n  "title"', 1)
+        self.last_raw_text = None
+
+    def complete_json(self, messages, *, temperature=0, timeout_seconds=None):
+        raise AssertionError("WorldSpec generator should request raw text")
+
+    def complete_text(self, messages, *, temperature=0.4, timeout_seconds=None):
+        self.last_raw_text = self.raw
+        return self.raw
+
+
+class LocalJsonRepairLLM:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def complete_json(self, messages, *, temperature=0, timeout_seconds=None):
+        raise AssertionError("JSON repair should request repaired fragment text")
+
+    def complete_text(self, messages, *, temperature=0.4, timeout_seconds=None):
+        self.calls.append(messages)
+        payload = json.loads(messages[1]["content"])
+        return payload["fragment"].replace('"\n  "title"', '",\n  "title"', 1)
 
 
 def test_sample_worldspecs_validate() -> None:
@@ -256,6 +289,29 @@ def test_generation_trace_is_saved_and_available_from_debug_api() -> None:
     assert trace["adopted_spec"]["world_id"] == generated["spec"]["world_id"]
     assert trace["adopted_spec_genre"] == "village"
     assert trace["validation_report"]["valid"] is False
+
+
+def test_worldspec_generation_trace_records_json_repair_attempts(monkeypatch) -> None:
+    conn = connect(":memory:")
+    init_db(conn)
+    repair_llm = LocalJsonRepairLLM()
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_ENABLED", "true")
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_WINDOW_LINES", "1")
+    monkeypatch.setattr("game_world_kg.worldspec_safe.build_json_repair_client_from_env", lambda: repair_llm)
+    service = GameWorldService(conn, BrokenJsonWorldSpecLLM())
+
+    generated = service.generate_worldspec("我想玩一个边境驿站，玩家是密探")
+    trace = service.latest_worldspec_generation_trace()
+
+    assert generated["source"] == "llm_candidate"
+    assert "Expecting" in trace["json_parse_error"]
+    assert trace["json_repair_enabled"] is True
+    assert trace["json_repair_used"] is True
+    assert trace["json_repair_attempts"]
+    assert trace["json_repair_attempts"][0]["fragment_before"]
+    assert trace["json_repair_attempts"][0]["fragment_after"]
+    assert trace["json_repaired_response"]
+    assert repair_llm.calls
 
 
 def test_worldspec_debug_routes_return_latest_and_trace_by_id() -> None:

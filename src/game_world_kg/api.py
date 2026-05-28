@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+import json
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -167,6 +169,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/v1/worldspec/bootstrap")
     def v1_worldspec_bootstrap(request: WorldSpecPayloadRequest) -> dict[str, Any]:
         return _handle(lambda: service.bootstrap_worldspec(request.spec))
+
+    @app.post("/v1/worldspec/bootstrap-from-file")
+    async def v1_worldspec_bootstrap_from_file(file: UploadFile = File(...)) -> dict[str, Any]:
+        raw = await file.read()
+        try:
+            spec = json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON file: {exc}")
+        return _handle(lambda: service.bootstrap_worldspec(spec))
 
     @app.get("/worlds/{world_id}/worldspec")
     def get_worldspec(world_id: str) -> dict[str, Any]:

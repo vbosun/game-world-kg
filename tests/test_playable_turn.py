@@ -66,7 +66,8 @@ def test_selected_action_must_be_current_affordance() -> None:
 
     assert result["turn"]["accepted"] is False
     assert result["turn"]["action_id"] == "__unparsed__"
-    assert service.events(DEMO_WORLD_ID)[-1]["event_type"] == "ACTION_REJECTED"
+    event_types = [e["event_type"] for e in service.events(DEMO_WORLD_ID)]
+    assert "ACTION_REJECTED" in event_types
 
 
 def test_unknown_free_input_writes_action_rejected() -> None:
@@ -75,7 +76,8 @@ def test_unknown_free_input_writes_action_rejected() -> None:
     result = service.play_turn(DEMO_WORLD_ID, "我召唤一座不存在的空中城")
 
     assert result["changes"][0]["type"] == "rule_rejection"
-    assert service.events(DEMO_WORLD_ID)[-1]["event_type"] == "ACTION_REJECTED"
+    event_types = [e["event_type"] for e in service.events(DEMO_WORLD_ID)]
+    assert "ACTION_REJECTED" in event_types
 
 
 def test_feedback_changes_are_event_and_state_diff_driven() -> None:

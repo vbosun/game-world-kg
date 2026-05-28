@@ -52,7 +52,10 @@ def test_play_turn_rejects_unbound_free_input_with_game_hint_and_event() -> None
     assert result["bound_action"] is None
     assert result["changes"][0]["type"] == "rule_rejection"
     assert "你可以先尝试" in result["feedback"]["narration"]
-    assert service.events(DEMO_WORLD_ID)[-1]["event_type"] == "ACTION_REJECTED"
+    all_events = service.events(DEMO_WORLD_ID)
+    event_types = [e["event_type"] for e in all_events]
+    assert "ACTION_REJECTED" in event_types
+    assert "WITNESS_ATTEMPT" in event_types  # fail-forward
 
 
 def test_play_api_routes_are_available() -> None:

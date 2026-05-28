@@ -730,3 +730,49 @@ PG-06 Foreground NPC Scheduler
 一句话：
 
 > 第一阶段不是让 LLM 一次生成完美世界，而是让 WorldSpec 生成从“不可控 JSON 输出”变成“可诊断、可校验、可拒绝、可 fallback 的 DSL 生成候选”。
+
+---
+
+## 17. JSON 语法修复层补充
+
+WorldSpec 生成链路现在区分两类失败：
+
+```text
+JSONDecodeError：原始 LLM 文本不是合法 JSON，尚不能进入 normalizer / validator。
+ValidationError：JSON 已可解析，但不符合 WorldSpec schema / DSL 约束。
+```
+
+JSON 语法修复层只处理第一类失败，并且只允许做局部文本修复：
+
+```text
+raw LLM response
+→ extract_json_candidate()
+→ cheap_sanitize_json_text()
+→ json.loads()
+→ JSONDecodeError 时截取错误附近 window
+→ LocalizedJsonRepairer 调本地小模型只修该 fragment
+→ 替换回完整文本
+→ 重新整体 json.loads()
+```
+
+它不负责：
+
+```text
+补 action_id；
+把 string effect 转成 effect object；
+把自然语言 objective 转成结构化 objective；
+补 tension.description；
+修引用不存在；
+补足 small_dense 数量；
+改变题材或世界内容。
+```
+
+这些仍然属于：
+
+```text
+WorldSpecNormalizer
+WorldSpecValidator
+WorldSpecRepairer
+```
+
+默认不开启 JSON repair。启用时使用 `WORLDGEN_JSON_REPAIR_*` 环境变量配置本地小模型；generation trace 会记录 `json_parse_error`、`json_repair_used`、`json_repair_attempts`、`json_repaired_response` 等字段，便于调试每一轮局部修复。

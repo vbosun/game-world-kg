@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .config import JsonRepairConfig
+from .json_repair import LocalizedJsonRepairer, build_json_repair_client_from_env
 from .worldspec import WorldIntentExtractor, WorldSpec, WorldSpecValidator
 from .worldspec_prompt_templates import build_full_worldspec_prompt
 from .worldspec_runtime import WorldSpecNormalizer, WorldSpecRepairer, sample_world_spec
@@ -34,6 +36,13 @@ class WorldSpecGenerator:
         self.last_candidate_payload: dict[str, Any] | None = None
         self.last_normalized_candidate: dict[str, Any] | None = None
         self.last_raw_response: str | None = None
+        self.last_json_parse_error: str | None = None
+        self.last_json_repair_enabled: bool = False
+        self.last_json_repair_used: bool = False
+        self.last_json_repair_mode: str = "localized"
+        self.last_json_repair_model: str | None = None
+        self.last_json_repair_attempts: list[dict[str, Any]] = []
+        self.last_json_repaired_response: str | None = None
         self.last_validation_report: dict[str, Any] | None = None
         self.last_repair_attempts: list[dict[str, Any]] = []
         self.last_error: str | None = None
@@ -56,8 +65,22 @@ class WorldSpecGenerator:
         try:
             timeout_seconds = getattr(getattr(self.llm_client, "config", None), "worldgen_timeout_seconds", None)
             timeout_kwargs = {"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}
-            payload = self.llm_client.complete_json(_worldspec_messages(intent), temperature=0.2, **timeout_kwargs)
-            self.last_raw_response = getattr(self.llm_client, "last_raw_text", None)
+            raw_text = self.llm_client.complete_text(_worldspec_messages(intent), temperature=0.2, **timeout_kwargs)
+            self.last_raw_response = raw_text
+            json_repair_config = JsonRepairConfig.from_env()
+            self.last_json_repair_enabled = json_repair_config.enabled
+            self.last_json_repair_mode = json_repair_config.mode
+            self.last_json_repair_model = json_repair_config.model if json_repair_config.enabled else None
+            repairer = LocalizedJsonRepairer(build_json_repair_client_from_env(), json_repair_config)
+            parse_result = repairer.parse_or_repair(raw_text)
+            self.last_json_parse_error = parse_result.error or (parse_result.attempts[0].error if parse_result.attempts else None)
+            self.last_json_repair_used = parse_result.json_repair_used
+            self.last_json_repair_attempts = [attempt.as_dict() for attempt in parse_result.attempts]
+            self.last_json_repaired_response = parse_result.repaired_text if parse_result.json_repair_used else None
+            if not parse_result.success or parse_result.parsed_json is None:
+                self.last_error = "JSONDecodeError: " + (parse_result.error or "unknown JSON parse error")
+                return None
+            payload = parse_result.parsed_json
             self.last_candidate_payload = payload
             normalized = self.normalizer.normalize(payload)
             self.last_normalized_candidate = normalized

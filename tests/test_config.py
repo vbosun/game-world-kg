@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from game_world_kg.config import LLMConfig, load_dotenv
+from game_world_kg.config import JsonRepairConfig, LLMConfig, load_dotenv
 
 
 def test_load_dotenv_sets_missing_values(tmp_path: Path, monkeypatch) -> None:
@@ -65,3 +65,48 @@ def test_llm_worldgen_timeout_can_be_overridden(monkeypatch) -> None:
     assert config.timeout_seconds == 45.0
     assert config.worldgen_timeout_seconds == 240.0
     assert config.max_tokens == 8192
+
+
+def test_json_repair_config_defaults_disabled(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    for key in [
+        "WORLDGEN_JSON_REPAIR_ENABLED",
+        "WORLDGEN_JSON_REPAIR_MODE",
+        "WORLDGEN_JSON_REPAIR_PROVIDER",
+        "WORLDGEN_JSON_REPAIR_BASE_URL",
+        "WORLDGEN_JSON_REPAIR_MODEL",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    config = JsonRepairConfig.from_env()
+
+    assert config.enabled is False
+    assert config.mode == "localized"
+    assert config.provider == "openai_compatible"
+    assert config.temperature == 0
+    assert config.max_attempts == 2
+    assert config.window_lines == 8
+
+
+def test_json_repair_config_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_ENABLED", "true")
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_BASE_URL", "http://127.0.0.1:8000/v1")
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_MODEL", "qwen-coder")
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_TIMEOUT_SECONDS", "11")
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_MAX_TOKENS", "2048")
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("WORLDGEN_JSON_REPAIR_WINDOW_LINES", "5")
+
+    config = JsonRepairConfig.from_env()
+    llm_config = config.to_llm_config()
+
+    assert config.enabled is True
+    assert config.model == "qwen-coder"
+    assert config.timeout_seconds == 11
+    assert config.max_tokens == 2048
+    assert config.max_attempts == 3
+    assert config.window_lines == 5
+    assert llm_config.provider == "openai_compatible"
+    assert llm_config.base_url == "http://127.0.0.1:8000/v1"
+    assert llm_config.max_tokens == 2048

@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .action_template import ActionTemplateEngine, ActionResolver, ActionTemplateStore
-from .db import transaction
-from .events import EventLog
+from .events import EventLog, StateDelta
 from .graph import WorldGraph
 
 
@@ -75,38 +74,40 @@ class NPCPlanner:
         if action is None:
             return {"world_id": world_id, "npc_id": npc_id, "acted": False, "reason": "no_valid_affordance", "context": context.as_dict()}
         log = EventLog(self.conn)
-        with transaction(self.conn):
-            turn_id = log.create_turn(world_id, f"npc_tick:{npc_id}:{action['action_id']}")
-            row = self.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
-            resolution = ActionResolver(self.conn).resolve(
-                world_id,
-                turn_id,
-                row["turn_index"],
-                action["action_id"],
-                [{"source_id": turn_id, "source_type": "npc_planner", "extractor": "npc_planner_v1", "confidence": action.get("score", 0.5)}],
-                actor_id=npc_id,
-                target_id=action.get("target_id") or None,
-            )
-            if resolution is None or not resolution.accepted:
-                return {
-                    "world_id": world_id,
-                    "npc_id": npc_id,
-                    "acted": False,
-                    "action": action,
-                    "reason": resolution.reason if resolution else "no_template",
-                    "context": context.as_dict(),
-                }
-            marker = log.append(
-                world_id,
-                turn_id,
-                row["turn_index"],
-                "NPC_ACTION",
-                npc_id,
-                {"action_id": action["action_id"], "target_id": action.get("target_id"), "reason": action.get("reason", "")},
-                participants=[npc_id, action.get("target_id", "")],
-                causal_parents=[event.id for event in resolution.events],
-                evidence_refs=[{"source_id": turn_id, "source_type": "npc_planner", "extractor": "npc_planner_v1", "confidence": action.get("score", 0.5)}],
-            )
+        turn_id = log.create_turn(world_id, f"npc_tick:{npc_id}:{action['action_id']}")
+        row = self.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+        resolution = ActionResolver(self.conn).resolve(
+            world_id,
+            turn_id,
+            row["turn_index"],
+            action["action_id"],
+            [{"source_id": turn_id, "source_type": "npc_planner", "extractor": "npc_planner_v1", "confidence": action.get("score", 0.5)}],
+            actor_id=npc_id,
+            target_id=action.get("target_id") or None,
+        )
+        if resolution is None or not resolution.accepted:
+            return {
+                "world_id": world_id,
+                "npc_id": npc_id,
+                "acted": False,
+                "action": action,
+                "reason": resolution.reason if resolution else "no_template",
+                "context": context.as_dict(),
+            }
+        relation_deltas = self._relation_deltas(world_id, npc_id, action)
+        marker = log.append(
+            world_id,
+            turn_id,
+            row["turn_index"],
+            "NPC_ACTION",
+            npc_id,
+            {"action_id": action["action_id"], "target_id": action.get("target_id"), "reason": action.get("reason", "")},
+            participants=[npc_id, action.get("target_id", "")],
+            causal_parents=[event.id for event in resolution.events],
+            evidence_refs=[{"source_id": turn_id, "source_type": "npc_planner", "extractor": "npc_planner_v1", "confidence": action.get("score", 0.5)}],
+            state_deltas=relation_deltas,
+        )
+        rumor_events = self._propagate_rumor(world_id, npc_id, action, row["turn_index"], log) if action else []
         return {
             "world_id": world_id,
             "npc_id": npc_id,
@@ -114,15 +115,66 @@ class NPCPlanner:
             "action": action,
             "events": [
                 {"id": event.id, "event_type": event.event_type, "payload": event.payload}
-                for event in [*resolution.events, marker]
+                for event in [*resolution.events, marker, *rumor_events]
             ],
             "context": context.as_dict(),
         }
 
     def tick_world(self, world_id: str, limit: int = 3) -> dict[str, Any]:
-        npcs = self._active_npcs(world_id)[: max(1, min(limit, 3))]
-        results = [self.tick_npc(world_id, npc_id) for npc_id in npcs]
-        return {"world_id": world_id, "npc_count": len(npcs), "results": results}
+        turn_index = self._current_turn_index(world_id)
+        foreground = self._foreground_npcs(world_id)[:limit]
+        results = [self.tick_npc(world_id, npc_id) for npc_id in foreground]
+        midground = self._midground_npcs(world_id, foreground) if turn_index % 3 == 0 else []
+        for npc_id in midground[:2]:
+            result = self.tick_npc(world_id, npc_id)
+            result["tier"] = "midground"
+            results.append(result)
+        background_summary = self._tick_background(world_id) if turn_index % 5 == 0 else None
+        return {
+            "world_id": world_id,
+            "npc_count": len(foreground) + len(midground),
+            "results": results,
+            "background": background_summary,
+        }
+
+    def _current_turn_index(self, world_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT MAX(turn_index) FROM turns WHERE world_id = ?",
+            (world_id,),
+        ).fetchone()
+        return (row[0] or 0) + 1 if row else 1
+
+    def _foreground_npcs(self, world_id: str) -> list[str]:
+        return self._active_npcs(world_id)
+
+    def _midground_npcs(self, world_id: str, exclude: list[str]) -> list[str]:
+        graph = WorldGraph(self.conn).graph(world_id)
+        state = self.service.state(world_id)
+        exclude_set = set(exclude) | {"player"}
+        npcs: list[str] = []
+        for node in graph["nodes"]:
+            npc_id = node["id"]
+            if node["entity_type"] != "Character" or npc_id in exclude_set or not state.get(npc_id, {}).get("location"):
+                continue
+            npcs.append(npc_id)
+        scored = [(hash(npc_id) % 100, npc_id) for npc_id in npcs]
+        scored.sort(reverse=True)
+        return [npc_id for _, npc_id in scored]
+
+    def _tick_background(self, world_id: str) -> dict[str, Any] | None:
+        state = self.service.state(world_id)
+        factions = [
+            npc_id for npc_id, attrs in state.items()
+            if attrs.get("entity_type") == "Faction"
+        ]
+        if not factions:
+            return None
+        faction_id = factions[hash(self._current_turn_index(world_id)) % len(factions)]
+        return {
+            "tier": "background",
+            "faction_id": faction_id,
+            "summary": f"Background activity from {faction_id} at turn {self._current_turn_index(world_id)}.",
+        }
 
     def _active_npcs(self, world_id: str) -> list[str]:
         graph = WorldGraph(self.conn).graph(world_id)
@@ -142,6 +194,55 @@ class NPCPlanner:
             scored.append((-score, index, npc_id))
         scored.sort()
         return [npc_id for _, _, npc_id in scored]
+
+    def _propagate_rumor(self, world_id: str, npc_id: str, action: dict[str, Any], turn_index: int, log: EventLog) -> list[Any]:
+        state = self.service.state(world_id)
+        loc = state.get(npc_id, {}).get("location")
+        if not loc:
+            return []
+        memories = self.service.recall_memory(world_id, npc_id, "rumor target", 3)
+        if not memories:
+            return []
+        others = [
+            other_id for other_id, attrs in state.items()
+            if other_id != npc_id and other_id != "player" and attrs.get("location") == loc
+        ]
+        if not others:
+            return []
+        listener_id = others[0]
+        memory = memories[0]
+        rumor_event = log.append(
+            world_id,
+            None,
+            turn_index,
+            "SPREAD_RUMOR",
+            npc_id,
+            {"from_npc": npc_id, "to_npc": listener_id, "memory_text": memory.get("memory_text", ""), "location": loc},
+            participants=[npc_id, listener_id],
+            evidence_refs=[{"source_id": memory.get("id", ""), "source_type": "npc_memory", "extractor": "rumor_propagation_v0", "confidence": 0.5}],
+        )
+        return [rumor_event]
+
+    def _relation_deltas(self, world_id: str, npc_id: str, action: dict[str, Any]) -> list[StateDelta]:
+        deltas: list[StateDelta] = []
+        target_id = action.get("target_id")
+        if not target_id or target_id == npc_id:
+            return deltas
+        state = self.service.state(world_id)
+        action_kind = action.get("action_id", "")
+        if "help" in action_kind or "give" in action_kind:
+            current = state.get(target_id, {}).get(f"trust.{npc_id}", 0)
+            deltas.append(StateDelta(entity_id=target_id, attr=f"trust.{npc_id}", old_value=current if isinstance(current, (int, float)) else 0, new_value=(current if isinstance(current, (int, float)) else 0) + 1))
+        elif "threaten" in action_kind or "attack" in action_kind:
+            current = state.get(target_id, {}).get(f"fear.{npc_id}", 0)
+            deltas.append(StateDelta(entity_id=target_id, attr=f"fear.{npc_id}", old_value=current if isinstance(current, (int, float)) else 0, new_value=(current if isinstance(current, (int, float)) else 0) + 1))
+        elif "trade" in action_kind or "buy" in action_kind or "sell" in action_kind:
+            current = state.get(target_id, {}).get(f"debt.{npc_id}", 0)
+            deltas.append(StateDelta(entity_id=target_id, attr=f"debt.{npc_id}", old_value=current if isinstance(current, (int, float)) else 0, new_value=(current if isinstance(current, (int, float)) else 0) + 1))
+        elif "move" in action_kind:
+            current_r = state.get(target_id, {}).get(f"respect.{npc_id}", 0)
+            deltas.append(StateDelta(entity_id=target_id, attr=f"respect.{npc_id}", old_value=current_r if isinstance(current_r, (int, float)) else 0, new_value=(current_r if isinstance(current_r, (int, float)) else 0) + 1))
+        return deltas
 
     @staticmethod
     def _choose_action(context: PlannerContext) -> dict[str, Any] | None:

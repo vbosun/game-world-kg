@@ -362,6 +362,13 @@ class GameWorldService:
                 "requested_genre": getattr(generator, "requested_genre", None),
                 "source": generator.last_source,
                 "raw_llm_response": raw_llm_response,
+                "json_parse_error": getattr(generator, "last_json_parse_error", None),
+                "json_repair_enabled": getattr(generator, "last_json_repair_enabled", False),
+                "json_repair_mode": getattr(generator, "last_json_repair_mode", "localized"),
+                "json_repair_used": getattr(generator, "last_json_repair_used", False),
+                "json_repair_model": getattr(generator, "last_json_repair_model", None),
+                "json_repaired_response": getattr(generator, "last_json_repaired_response", None),
+                "json_repair_attempts": getattr(generator, "last_json_repair_attempts", []),
                 "parsed_candidate": generator.last_candidate_payload,
                 "normalized_candidate": getattr(generator, "last_normalized_candidate", None),
                 "validation_report": getattr(generator, "last_validation_report", None) or report,
@@ -487,12 +494,14 @@ class GameWorldService:
     def tick_world(self, world_id: str, limit: int = 3) -> dict[str, Any]:
         with self._lock:
             self._require_world(world_id)
-            return NPCPlanner(self.conn, self).tick_world(world_id, limit)
+            with transaction(self.conn):
+                return NPCPlanner(self.conn, self).tick_world(world_id, limit)
 
     def tick_npc(self, world_id: str, npc_id: str) -> dict[str, Any]:
         with self._lock:
             self._require_world(world_id)
-            return NPCPlanner(self.conn, self).tick_npc(world_id, npc_id)
+            with transaction(self.conn):
+                return NPCPlanner(self.conn, self).tick_npc(world_id, npc_id)
 
     def planner_context(self, world_id: str, npc_id: str) -> dict[str, Any]:
         with self._lock:

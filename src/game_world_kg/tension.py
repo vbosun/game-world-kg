@@ -17,16 +17,34 @@ class Tension:
     evidence: list[dict[str, Any]]
     affected_entities: list[str]
     suggested_actions: list[str]
+    priority: float = 0.5
+    stake: str = ""
+    deadline_turn: int | None = None
+    sponsors: list[str] = ()
+    blockers: list[str] = ()
+    player_touchpoints: list[str] = ()
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "tension_id": self.tension_id,
             "type": self.type,
             "reason": self.reason,
             "evidence": self.evidence,
             "affected_entities": self.affected_entities,
             "suggested_actions": self.suggested_actions,
+            "priority": self.priority,
         }
+        if self.stake:
+            result["stake"] = self.stake
+        if self.deadline_turn is not None:
+            result["deadline_turn"] = self.deadline_turn
+        if self.sponsors:
+            result["sponsors"] = list(self.sponsors)
+        if self.blockers:
+            result["blockers"] = list(self.blockers)
+        if self.player_touchpoints:
+            result["player_touchpoints"] = list(self.player_touchpoints)
+        return result
 
 
 class TensionScanner:
@@ -51,6 +69,11 @@ class TensionScanner:
                     ],
                     affected_entities=["player", "iron_gate", "inner_city"],
                     suggested_actions=["show_pass_token", "request_access", "ask_guard_open_gate", "unlock_gate_with_key"],
+                    priority=0.9,
+                    stake="无法进入内城意味着主线剧情无法推进，玩家将被困在村口区域。",
+                    sponsors=["village_chief", "merchant_borin"],
+                    blockers=["guard_alos"],
+                    player_touchpoints=["show_pass_token", "unlock_gate_with_key", "bribe_guard"],
                 )
             )
 
@@ -64,6 +87,11 @@ class TensionScanner:
                     evidence=[_state_evidence("guard_alos", "trust.player", trust)],
                     affected_entities=["guard_alos", "player", "iron_gate"],
                     suggested_actions=["show_pass_token", "bribe_guard", "talk_to_guard"],
+                    priority=0.7,
+                    stake="守卫阿洛斯是通往内城的关键看门人，信任度决定了玩家能否和平进入。",
+                    sponsors=["village_chief"],
+                    blockers=[],
+                    player_touchpoints=["show_pass_token", "talk_to_guard", "ask_guard_open_gate"],
                 )
             )
 
@@ -82,6 +110,11 @@ class TensionScanner:
                     evidence=[_memory_evidence(memory) for memory in rumor_memories],
                     affected_entities=["player", "silver_key", "guard_alos", "tavern_public"],
                     suggested_actions=["ask_about_rumor", "clarify_rumor", "talk_to_mira"],
+                    priority=0.6,
+                    stake="谣言会降低 NPC 对玩家的信任，并可能触发守卫的敌意行为。",
+                    sponsors=["mira"],
+                    blockers=["guard_alos"],
+                    player_touchpoints=["ask_about_rumor", "clarify_rumor", "talk_to_mira"],
                 )
             )
 
@@ -95,6 +128,11 @@ class TensionScanner:
                     evidence=[_state_evidence("warehouse", "locked", True)],
                     affected_entities=["warehouse", "warehouse_keeper", "ledger_book", "grain_bag"],
                     suggested_actions=["request_warehouse_access", "inspect_warehouse"],
+                    priority=0.65,
+                    stake="仓库中的账本和粮食是解决粮食短缺和商人信任问题的关键证据。",
+                    sponsors=["merchant_borin", "village_chief"],
+                    blockers=["warehouse_keeper"],
+                    player_touchpoints=["request_warehouse_access", "inspect_warehouse"],
                 )
             )
 
@@ -109,6 +147,12 @@ class TensionScanner:
                     evidence=[_state_evidence("warehouse", "grain_stock", grain_stock)],
                     affected_entities=["warehouse", "grain_bag", "merchant_borin", "village_chief"],
                     suggested_actions=["trade_grain", "talk_to_chief", "inspect_warehouse"],
+                    priority=0.55,
+                    stake="粮食短缺会影响整个村庄的稳定，商人的去留取决于此问题的解决。",
+                    deadline_turn=30,
+                    sponsors=["merchant_borin"],
+                    blockers=["warehouse_keeper"],
+                    player_touchpoints=["trade_grain", "talk_to_chief", "inspect_warehouse"],
                 )
             )
 
@@ -136,6 +180,11 @@ class TensionScanner:
                     "affected_entities": payload.get("affected_entities", []),
                     "suggested_actions": payload.get("suggested_actions", []),
                     "priority": payload.get("priority", 0.5),
+                    "stake": payload.get("stake", ""),
+                    "deadline_turn": payload.get("deadline_turn"),
+                    "sponsors": payload.get("sponsors", []),
+                    "blockers": payload.get("blockers", []),
+                    "player_touchpoints": payload.get("player_touchpoints", []),
                 }
             )
             known.add(tension_id)

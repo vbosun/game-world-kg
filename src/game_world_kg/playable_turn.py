@@ -4,11 +4,29 @@ from typing import TYPE_CHECKING, Any
 
 from .affordance import AffordanceEngine
 from .db import transaction
-from .events import EventLog
+from .events import EventLog, StateDelta
 from .feedback_renderer import FeedbackRenderer
 from .input_binder import BoundAction, InputBinder
+from .llm import ActionCandidate
 from .projector import StateProjector
 from .scene_renderer import SceneRenderer
+
+_GROWTH_ATTRS: dict[str, str] = {
+    "talk": "skill.social",
+    "work": "skill.labor",
+    "move": "skill.exploration",
+    "buy": "skill.commerce",
+    "sell": "skill.commerce",
+    "gather": "skill.knowledge",
+    "visit": "skill.health",
+    "inspect": "skill.perception",
+    "bribe": "skill.social",
+    "ask": "skill.social",
+    "steal": "skill.stealth",
+    "trade": "skill.commerce",
+    "fight": "skill.combat",
+    "heal": "skill.health",
+}
 
 if TYPE_CHECKING:
     from .service import GameWorldService
@@ -44,11 +62,16 @@ class PlayableTurnKernel:
         before = self.service.state(world_id)
         affordances = self.play_affordances(world_id)
         bound = self.binder.bind(player_input, affordances, selected_action_id=selected_action_id, selected_target_id=selected_target_id)
+        if bound is None and player_input.strip():
+            bound = self._llm_bind(player_input, affordances, before)
         if bound is None:
             turn_result = self._reject(world_id, player_input, affordances)
         else:
             turn_result = self._run_bound_turn(world_id, player_input, bound)
             if turn_result.get("accepted"):
+                growth_event = self._record_growth(world_id, bound.action_id)
+                if growth_event is not None:
+                    turn_result["events"] = [*turn_result.get("events", []), growth_event]
                 npc_activity = self._tick_foreground_npcs(world_id)
                 turn_result["npc_activity"] = npc_activity
                 turn_result["events"] = [*turn_result.get("events", []), *_npc_events(npc_activity)]
@@ -78,9 +101,37 @@ class PlayableTurnKernel:
             command,
             bound.action_id,
             bound.target_id,
-            extractor="play_input_binder",
+            extractor=bound.reason if bound.reason.startswith("llm") else "play_input_binder",
             confidence=bound.confidence,
         )
+
+    def _llm_bind(self, player_input: str, affordances: list[dict[str, Any]], state: dict[str, dict[str, Any]]) -> BoundAction | None:
+        parser = self.service.action_parser
+        if parser.client is None:
+            return None
+        candidate = parser.parse(player_input, state, affordances, require_current_affordance=True)
+        if candidate is None:
+            return None
+        matched = self._match_affordance(candidate, affordances)
+        if matched is None:
+            return None
+        return BoundAction(
+            action_id=candidate.action_id,
+            target_id=candidate.target_id,
+            label=matched.get("label") or candidate.action_id,
+            confidence=candidate.confidence,
+            reason="llm_semantic_match",
+        )
+
+    @staticmethod
+    def _match_affordance(candidate: ActionCandidate, affordances: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for aff in affordances:
+            if aff["action_id"] == candidate.action_id and (aff.get("target_id") or None) == (candidate.target_id or None):
+                return aff
+        for aff in affordances:
+            if aff["action_id"] == candidate.action_id:
+                return aff
+        return None
 
     def _tick_foreground_npcs(self, world_id: str) -> dict[str, Any]:
         npc_activity = self.service.tick_world(world_id, 3)
@@ -112,6 +163,7 @@ class PlayableTurnKernel:
 
     def _reject(self, world_id: str, player_input: str, affordances: list[dict[str, Any]]) -> dict[str, Any]:
         reason = "自由输入没有绑定到当前任何合法行动"
+        failure_events: list[dict[str, Any]] = []
         with self.service._lock:
             with transaction(self.service.conn):
                 log = EventLog(self.service.conn)
@@ -127,7 +179,10 @@ class PlayableTurnKernel:
                     participants=["player"],
                 )
                 StateProjector(self.service.conn).apply_event(event)
-        event_payload = {"id": event.id, "event_type": event.event_type, "actor_id": event.actor_id, "participants": event.participants, "payload": event.payload}
+                failure_events.append({"id": event.id, "event_type": event.event_type, "actor_id": event.actor_id, "participants": event.participants, "payload": event.payload})
+                witness_event = self._witness_attempt(world_id, turn_id, turn["turn_index"], player_input, log)
+                if witness_event is not None:
+                    failure_events.append(witness_event)
         feedback = self.feedback.rejection(player_input, affordances, reason)
         return {
             "turn_id": turn_id,
@@ -136,10 +191,66 @@ class PlayableTurnKernel:
             "action_id": "__unparsed__",
             "reason": reason,
             "narration": feedback["narration"],
-            "events": [event_payload],
+            "events": failure_events,
             "affordances": affordances,
             "feedback": feedback,
         }
+
+    def _witness_attempt(self, world_id: str, turn_id: str, turn_index: int, player_input: str, log: EventLog) -> dict[str, Any] | None:
+        state = self.service.state(world_id)
+        player_location = state.get("player", {}).get("location")
+        if not player_location:
+            return None
+        npcs = [
+            npc_id for npc_id, attrs in state.items()
+            if npc_id != "player" and attrs.get("location") == player_location
+        ]
+        if not npcs:
+            return None
+        witness_id = npcs[0]
+        memory_text = f"我看到玩家尝试「{player_input[:40]}」，但似乎没什么效果。"
+        current_suspicion = state.get(witness_id, {}).get("suspicion.player", 0)
+        current_suspicion = current_suspicion if isinstance(current_suspicion, (int, float)) else 0
+        event = log.append(
+            world_id,
+            turn_id,
+            turn_index,
+            "WITNESS_ATTEMPT",
+            witness_id,
+            {"player_input": player_input, "memory_text": memory_text, "location": player_location},
+            participants=[witness_id, "player"],
+            state_deltas=[
+                StateDelta(entity_id=witness_id, attr="memory.player_attempt", old_value=None, new_value=memory_text, scope="npc"),
+                StateDelta(entity_id=witness_id, attr="suspicion.player", old_value=current_suspicion, new_value=current_suspicion + 1),
+            ],
+        )
+        StateProjector(self.service.conn).apply_event(event)
+        return {"id": event.id, "event_type": event.event_type, "actor_id": event.actor_id, "participants": event.participants, "payload": event.payload}
+
+    def _record_growth(self, world_id: str, action_id: str) -> dict[str, Any] | None:
+        attr = _growth_attr_for_action(action_id)
+        if attr is None:
+            return None
+        state = self.service.state(world_id)
+        current = state.get("player", {}).get(attr, 0)
+        new_value = (current if isinstance(current, (int, float)) else 0) + 1
+        with self.service._lock:
+            with transaction(self.service.conn):
+                log = EventLog(self.service.conn)
+                turn_id = log.create_turn(world_id, f"growth:{action_id}", "Player growth from action.")
+                turn = self.service.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+                event = log.append(
+                    world_id,
+                    turn_id,
+                    turn["turn_index"],
+                    "PLAYER_GROWTH",
+                    "player",
+                    {"attr": attr, "delta": 1, "new_value": new_value, "action_id": action_id},
+                    participants=["player"],
+                    state_deltas=[StateDelta(entity_id="player", attr=attr, old_value=current, new_value=new_value)],
+                )
+                StateProjector(self.service.conn).apply_event(event)
+        return {"id": event.id, "event_type": event.event_type, "actor_id": event.actor_id, "participants": event.participants, "payload": event.payload}
 
     def player_panel(self, world_id: str) -> dict[str, Any]:
         state = self.service.state(world_id)
@@ -252,6 +363,13 @@ class PlayableTurnKernel:
             "npc_should_approach_player": foreground.get("npc_should_approach_player"),
             "ambient_event": foreground.get("ambient_event"),
         }
+
+
+def _growth_attr_for_action(action_id: str) -> str | None:
+    for pattern, attr in _GROWTH_ATTRS.items():
+        if pattern in action_id:
+            return attr
+    return None
 
 
 def _bound_payload(bound: BoundAction | None) -> dict[str, Any] | None:

@@ -72,6 +72,7 @@ class OpenAICompatibleClient:
         payload = {
             "model": self.config.model,
             "messages": messages,
+            "max_tokens": self.config.max_tokens,
             "temperature": temperature,
         }
         request = urllib.request.Request(

@@ -112,17 +112,29 @@ def _affordance_evidence(action_id: str, affordances: list[dict[str, Any]]) -> d
 
 def _quest_from_tension(tension: dict[str, Any], affordances: list[dict[str, Any]]) -> QuestCandidate | None:
     tension_id = tension["tension_id"]
+
+    # Known tension → curated quest (backward compatible)
+    curated = _curated_quest(tension, affordances)
+    if curated is not None:
+        return curated
+
+    # Generic fallback for WorldSpec tensions
+    return _generic_quest_from_tension(tension, affordances)
+
+
+def _curated_quest(tension: dict[str, Any], affordances: list[dict[str, Any]]) -> QuestCandidate | None:
+    tension_id = tension["tension_id"]
     if tension_id == "tension_guard_trust_low":
-        trust_evidence = tension["evidence"][0]
+        trust_evidence = tension["evidence"][0] if tension.get("evidence") else {}
         return QuestCandidate(
             quest_id="quest_gain_guard_trust",
             title="取得守卫信任",
-            reason=tension["reason"],
+            reason=tension.get("reason", ""),
             depends_on=["guard_alos.trust.player < 5"],
             required_state=[{"entity_id": "guard_alos", "attr": "trust.player", "operator": ">=", "value": 5}],
             reward={"unlock_affordance": "ask_guard_open_gate"},
             failure_consequence={"relation_delta": {"entity_id": "guard_alos", "attr": "hostility.player", "delta": 1}},
-            evidence=[trust_evidence],
+            evidence=tension.get("evidence", [])[:1] if tension.get("evidence") else [trust_evidence],
             tension_id=tension_id,
         )
     if tension_id == "tension_locked_iron_gate":
@@ -135,7 +147,7 @@ def _quest_from_tension(tension: dict[str, Any], affordances: list[dict[str, Any
             required_state=[{"entity_id": "iron_gate", "attr": "open", "operator": "==", "value": True}],
             reward={"location_access": "inner_city"},
             failure_consequence={"state": {"entity_id": "iron_gate", "attr": "open", "value": False}},
-            evidence=tension["evidence"] + [_affordance_evidence(route, affordances)],
+            evidence=tension.get("evidence", []) + [_affordance_evidence(route, affordances)],
             tension_id=tension_id,
         )
     if tension_id == "tension_key_theft_rumor":
@@ -143,38 +155,109 @@ def _quest_from_tension(tension: dict[str, Any], affordances: list[dict[str, Any
             quest_id="quest_clear_key_theft_rumor",
             title="澄清偷钥匙传闻",
             reason="村里存在玩家偷钥匙的传闻，可能影响 NPC 行为。",
-            depends_on=[item["memory_id"] for item in tension["evidence"] if item.get("source_type") == "memory"],
+            depends_on=[item["memory_id"] for item in tension.get("evidence", []) if item.get("source_type") == "memory"],
             required_state=[{"memory_scope": "rumor", "operator": "resolved", "topic": "key_theft"}],
             reward={"relation_delta": {"entity_id": "guard_alos", "attr": "trust.player", "delta": 1}},
             failure_consequence={"relation_delta": {"entity_id": "guard_alos", "attr": "hostility.player", "delta": 1}},
-            evidence=tension["evidence"],
+            evidence=tension.get("evidence", []),
             tension_id=tension_id,
         )
     if tension_id == "tension_warehouse_locked":
         return QuestCandidate(
             quest_id="quest_access_warehouse",
             title="取得仓库调查权限",
-            reason=tension["reason"],
+            reason=tension.get("reason", ""),
             depends_on=["warehouse.locked == true"],
             required_state=[{"entity_id": "warehouse", "attr": "locked", "operator": "==", "value": False}],
             reward={"unlock_affordance": "inspect_warehouse"},
             failure_consequence={"state": {"entity_id": "warehouse", "attr": "locked", "value": True}},
-            evidence=tension["evidence"],
+            evidence=tension.get("evidence", []),
             tension_id=tension_id,
         )
     if tension_id == "tension_grain_trade_blocked":
         return QuestCandidate(
             quest_id="quest_investigate_grain_trade",
             title="调查粮食交易阻滞",
-            reason=tension["reason"],
+            reason=tension.get("reason", ""),
             depends_on=["warehouse.grain_stock <= 12"],
             required_state=[{"entity_id": "warehouse", "attr": "grain_stock", "operator": ">", "value": 12}],
             reward={"relation_delta": {"entity_id": "village_chief", "attr": "trust.merchant_borin", "delta": 1}},
             failure_consequence={"relation_delta": {"entity_id": "merchant_borin", "attr": "trust.player", "delta": -1}},
-            evidence=tension["evidence"],
+            evidence=tension.get("evidence", []),
             tension_id=tension_id,
         )
     return None
+
+
+def _generic_quest_from_tension(tension: dict[str, Any], affordances: list[dict[str, Any]]) -> QuestCandidate | None:
+    tension_id = tension["tension_id"]
+    reason = tension.get("reason", "")
+    suggested_actions: list[str] = tension.get("suggested_actions", [])
+    player_touchpoints: list[str] = tension.get("player_touchpoints", [])
+    sponsors: list[str] = tension.get("sponsors", [])
+    blockers: list[str] = tension.get("blockers", [])
+    evidence: list[dict[str, Any]] = tension.get("evidence", [])
+
+    # Build solution paths from available affordances
+    all_action_ids = list(dict.fromkeys([*suggested_actions, *player_touchpoints]))
+    available_actions = [action_id for action_id in all_action_ids if any(item["action_id"] == action_id for item in affordances)]
+    if not available_actions:
+        available_actions = [action_id for action_id in all_action_ids if action_id in {"talk_to_guard", "move_to_location", "inspect", "ask"}]
+
+    # Evidence: combine tension evidence with affordance evidence
+    quest_evidence = list(evidence)
+    for action_id in available_actions[:3]:
+        quest_evidence.append(_affordance_evidence(action_id, affordances))
+
+    # Dependency: based on affected entities that are not the player
+    affected = [entity_id for entity_id in tension.get("affected_entities", []) if entity_id != "player"]
+    depends_on = [f"{entity_id}.exists" for entity_id in affected[:3]] if affected else ["player.location.exists"]
+
+    # Required state: complete at least one touchpoint action
+    if available_actions:
+        required_state = [{"entity_id": affected[0] if affected else "player", "attr": "action_completed", "operator": "==", "value": available_actions[0]}]
+        if len(available_actions) > 1:
+            required_state[0]["alternatives"] = available_actions[1:]
+    else:
+        required_state = [{"entity_id": affected[0] if affected else "player", "attr": "location", "operator": "exists"}]
+
+    # Reward: trust gain from sponsors
+    reward: dict[str, Any] = {}
+    if sponsors:
+        reward["relation_delta"] = {"entity_id": sponsors[0], "attr": "trust.player", "delta": 1}
+    elif available_actions:
+        reward["unlock_affordance"] = available_actions[-1] if len(available_actions) > 1 else available_actions[0]
+
+    # Failure consequence
+    failure_consequence: dict[str, Any] = {}
+    if blockers:
+        failure_consequence["relation_delta"] = {"entity_id": blockers[0], "attr": "hostility.player", "delta": 1}
+    else:
+        failure_consequence["state"] = {"entity_id": affected[0] if affected else "player", "attr": "quest_failed", "value": tension_id}
+
+    # Title from tension type
+    type_labels: dict[str, str] = {
+        "locked_location": "解锁区域",
+        "trust_below_threshold": "建立信任",
+        "rumor_unresolved": "澄清传闻",
+        "quest_dependency_missing": "消除障碍",
+        "resource_shortage": "缓解短缺",
+        "hostility_rising": "化解敌意",
+        "worldspec": "世界事件",
+    }
+    prefix = type_labels.get(tension.get("type", ""), "解决局势")
+
+    return QuestCandidate(
+        quest_id=f"quest_{tension_id.removeprefix('tension_')}",
+        title=f"{prefix}：{reason[:20]}",
+        reason=reason,
+        depends_on=depends_on,
+        required_state=required_state,
+        reward=reward,
+        failure_consequence=failure_consequence,
+        evidence=quest_evidence,
+        tension_id=tension_id,
+    )
 
 
 def _evidence_is_traceable(evidence: dict[str, Any]) -> bool:

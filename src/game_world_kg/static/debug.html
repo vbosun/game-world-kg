@@ -257,6 +257,11 @@
         </div>
       </div>
       <div class="card stack">
+        <h2>从 JSON 文件创建世界</h2>
+        <input type="file" id="jsonFileInput" accept=".json,application/json">
+        <button id="uploadJsonBtn" type="button">上传并启动</button>
+      </div>
+      <div class="card stack">
         <h2>提交回合</h2>
         <textarea id="turnInput">我把通行令递给守卫，问他能不能放我进去</textarea>
         <div class="row">
@@ -386,6 +391,36 @@
       });
       currentView = "worldspec";
       setStatus(data.generatedWorldSpec.validation_report?.valid ? `WorldSpec 已生成并通过校验，点击启动后进入 ${data.generatedWorldSpec.world_id}` : "WorldSpec 已生成但未通过校验", data.generatedWorldSpec.validation_report?.valid ? "ok" : "warn");
+      render();
+    }
+
+    async function uploadJsonBootstrap() {
+      const fileInput = document.getElementById("jsonFileInput");
+      const file = fileInput.files[0];
+      if (!file) {
+        setStatus("请先选择一个 JSON 文件", "warn");
+        return;
+      }
+      setStatus("上传并启动世界中...");
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/v1/worldspec/bootstrap-from-file", {
+        method: "POST",
+        body: formData
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`${response.status} ${body}`);
+      }
+      data.lastBootstrap = await response.json();
+      if (data.lastBootstrap.accepted === false) {
+        setStatus("JSON 未通过校验: " + JSON.stringify(data.lastBootstrap.validation_report?.errors || []), "warn");
+        return;
+      }
+      document.getElementById("worldId").value = data.lastBootstrap.world_id;
+      await refresh();
+      currentView = "overview";
+      setStatus("JSON 世界已启动: " + data.lastBootstrap.world_id, "ok");
       render();
     }
 
@@ -593,6 +628,21 @@
         <p class="muted">NPC: ${(scene.visible_npcs || []).map(n => escapeHtml(n.name)).join("、") || "-"}</p>
         <p class="muted">去路: ${(scene.connections || []).map(n => escapeHtml(n.name)).join("、") || "-"}</p>
       `);
+      const skills = player.skills ? Object.entries(player.skills).map(([k, v]) => `<span class="pill">${escapeHtml(k)} ${v}</span>`).join(" ") : "";
+      const right = card("Player", `
+        <div class="pill">位置 ${escapeHtml(player.location || "-")}</div>
+        <div class="pill">线索 ${(player.known_clues || []).length}</div>
+        <div class="pill">权限 ${(player.permissions || []).length}</div>
+        ${player.resources ? `<p class="muted">资源: ${Object.entries(player.resources).map(([k, v]) => `${k}(${v})`).join("、") || "-"}</p>` : ""}
+        ${player.skills && Object.keys(player.skills).length ? `<p><strong>成长</strong><br>${skills}</p>` : ""}
+        <h3>已知线索</h3>
+        ${(player.known_clues || []).slice(0, 5).map(c => `<p class="muted">${escapeHtml(typeof c === 'string' ? c : c.clue || JSON.stringify(c))}</p>`).join("") || `<p class="muted">暂无</p>`}
+        <h3>关系</h3>
+        ${(play.relationships || []).slice(0, 4).map(r => `<p>${escapeHtml(r.name)} <span class="muted">${escapeHtml(JSON.stringify(r.attitudes))}</span></p>`).join("") || `<p class="muted">暂无可见变化</p>`}
+      `);
+      const npcHtml = data.lastPlayTurn?.npc_activity ? (data.lastPlayTurn.npc_activity || []).map(a =>
+        `<p class="muted">${escapeHtml(a.npc_id || "")} ${escapeHtml(a.action_label || a.action?.action_id || "")} ${a.acted ? "✓" : "✗"}</p>`
+      ).join("") : "";
       const center = card("Turn", `
         <p>${escapeHtml(last.narration || "选择一个行动，或输入一句会被绑定到当前合法行动的话。")}</p>
         <div class="play-actions">${actions}</div>
@@ -600,18 +650,24 @@
         <textarea id="playInput" placeholder="自由输入，但必须能落到当前合法行动"></textarea>
         <div style="height:8px"></div>
         <button type="button" onclick="submitPlayTurn().catch(err => setStatus(err.message, 'bad'))">提交自由输入</button>
+        ${npcHtml ? `<h3>NPC 活动</h3>${npcHtml}` : ""}
+        ${data.lastPlayTurn?.world_reactions ? `<p class="muted">${escapeHtml(JSON.stringify(data.lastPlayTurn.world_reactions))}</p>` : ""}
       `);
-      const right = card("Player", `
-        <div class="pill">位置 ${escapeHtml(player.location || "-")}</div>
-        <div class="pill">线索 ${(player.known_clues || []).length}</div>
-        <div class="pill">权限 ${(player.permissions || []).length}</div>
-        <h3>任务</h3>
-        ${(play.quests || []).slice(0, 3).map(q => `<p><strong>${escapeHtml(q.title)}</strong><br><span class="muted">${escapeHtml(q.tension_reason || "")}</span></p>`).join("") || `<p class="muted">暂无任务</p>`}
-        <h3>关系</h3>
-        ${(play.relationships || []).slice(0, 4).map(r => `<p>${escapeHtml(r.name)} <span class="muted">${escapeHtml(JSON.stringify(r.attitudes))}</span></p>`).join("") || `<p class="muted">暂无可见变化</p>`}
+      const tensionCards = (play.tensions || []).slice(0, 3).map(t => `
+        <p><strong>${escapeHtml(t.type || "")}</strong><br>
+        <span class="muted">${escapeHtml(t.reason || t.description || "")}</span>
+        ${t.deadline_turn ? `<br><span class="bad">截止回合: ${t.deadline_turn}</span>` : ""}
+        </p>
+      `).join("");
+      const questCards = (play.quests || []).slice(0, 3).map(q => `
+        <p><strong>${escapeHtml(q.title)}</strong><br><span class="muted">${escapeHtml(q.reason || q.tension_reason || "")}</span></p>
+      `).join("");
+      const bottom = card("Tensions & Quests", `
+        <h3>局势</h3>${tensionCards || `<p class="muted">暂无压力</p>`}
+        <h3>任务</h3>${questCards || `<p class="muted">暂无任务</p>`}
       `);
       const feedback = data.lastPlayTurn ? card("Changes", `<pre>${escapeHtml(JSON.stringify(data.lastPlayTurn.changes, null, 2))}</pre>`) : "";
-      return `<div class="play-layout">${left}${center}${right}</div><div style="height:12px"></div>${feedback}`;
+      return `<div class="play-layout">${left}${center}${right}</div><div style="height:12px"></div>${bottom}<div style="height:12px"></div>${feedback}`;
     }
 
     function worldspecView() {
@@ -783,6 +839,7 @@
         refresh().catch(err => setStatus(err.message, "bad"));
       };
     });
+    document.getElementById("uploadJsonBtn").onclick = () => uploadJsonBootstrap().catch(err => setStatus(err.message, "bad"));
     document.getElementById("generateWorldBtn").onclick = () => generateWorldSpec().catch(err => setStatus(err.message, "bad"));
     document.getElementById("bootstrapWorldBtn").onclick = () => bootstrapGeneratedWorld().catch(err => setStatus(err.message, "bad"));
     document.getElementById("turnBtn").onclick = () => submitTurn().catch(err => setStatus(err.message, "bad"));

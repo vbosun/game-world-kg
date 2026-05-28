@@ -47,6 +47,10 @@ class FeedbackRenderer:
                 changes.append({"type": "resource_change", "entity_id": payload.get("entity_id"), "attr": payload.get("attr"), "delta": payload.get("delta"), "scope": payload.get("scope", "canonical"), "label": "资源变化"})
             elif event_type == "ACTION_REJECTED":
                 changes.append({"type": "rule_rejection", "label": "行动被规则拦截", "detail": payload.get("reason")})
+            elif event_type == "PLAYER_GROWTH":
+                changes.append({"type": "growth", "label": "成长", "attr": payload.get("attr"), "delta": payload.get("delta"), "new_value": payload.get("new_value")})
+            elif event_type == "WITNESS_ATTEMPT":
+                changes.append({"type": "witness", "label": "被目击", "witness_id": event.get("actor_id"), "memory": payload.get("memory_text")})
             else:
                 changes.append({"type": "world_event", "event_type": event_type, "label": "世界事件", "payload": payload})
 
@@ -78,6 +82,8 @@ def _change_type(attr: str) -> str:
         return "identity_change"
     if attr.startswith("knowledge") or attr == "known_clues":
         return "knowledge_change"
+    if attr.startswith("skill."):
+        return "growth"
     if ".player" in attr:
         return "relationship_change"
     return "state_change"
