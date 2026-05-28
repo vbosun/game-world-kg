@@ -77,7 +77,10 @@ FACTION_VALID_EXAMPLE: dict[str, Any] = {
     "name": "馆中管事",
     "faction_type": "organization",
     "goals": ["maintain_control", "protect_income"],
-    "relations": [],
+    "relations": [
+        {"target": "rival_guild", "relation": "opposes", "value": -0.6},
+        {"target": "merchant_alliance", "relation": "allies", "value": 0.7},
+    ],
 }
 FACTION_INVALID_EXAMPLE: dict[str, Any] = {"id": "house_staff", "name": "馆中管事", "members": ["npc_a", "npc_b"]}
 
@@ -198,6 +201,7 @@ def _default_schema_notes() -> dict[str, Any]:
             "character_goal": ["goal_id", "priority", "desired_state", "risk_tolerance"],
             "item": ["id", "stable_key", "name", "item_type", "owner_id or location_id"],
             "faction": ["id", "stable_key", "name", "faction_type", "goals", "relations"],
+            "faction_relation": ["target", "relation", "value"],
             "resource": ["entity", "attr", "value"],
             "initial_state": ["entity", "attr", "value"],
             "tension": ["id", "tension_type", "description", "affected_entities", "evidence", "suggested_actions", "priority"],

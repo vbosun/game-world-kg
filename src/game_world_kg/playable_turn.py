@@ -37,7 +37,7 @@ class PlayableTurnKernel:
     def play_affordances(self, world_id: str) -> list[dict[str, Any]]:
         items = self.service.affordances(world_id)
         risk_order = {"low": 0, "medium": 1, "high": 2}
-        return sorted(items, key=lambda item: (risk_order.get(item.get("risk", "low"), 9), item.get("label", "")))[:7]
+        return sorted(items, key=lambda item: (risk_order.get(item.get("risk", "low"), 9), item.get("label", "")))[:20]
 
     def play_turn(self, world_id: str, player_input: str, *, selected_action_id: str | None = None, selected_target_id: str | None = None, mode: str = "roleplay") -> dict[str, Any]:
         self.service._require_world(world_id)

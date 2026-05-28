@@ -1,0 +1,1211 @@
+{
+  "world_id": "corruption_town",
+  "title": "堕落小镇",
+  "genre": "corruption",
+  "theme": "魔法小镇，身体改造与药物强化都需要金钱。玩家作为初来乍到的年轻男性，必须在努力工作与出卖身体之间做出选择，积累财富后进行改造以赚取更多。堕落还是奋斗，全在一念之间。",
+  "starting_area": "town_entrance",
+  "scale": "small_dense",
+  "player_start": {
+    "character_id": "player",
+    "location_id": "town_entrance"
+  },
+  "ontology_extensions": [],
+  "locations": [
+    {
+      "id": "town_entrance",
+      "stable_key": "town_entrance",
+      "name": "小镇入口",
+      "description": "一道破旧木牌上写着「欢迎来到安布罗斯镇」，空气中弥漫着奇异的香料味和隐约的呻吟声。",
+      "location_type": "entrance",
+      "connects_to": [
+        "town_square"
+      ],
+      "tags": [
+        "start",
+        "arrival"
+      ]
+    },
+    {
+      "id": "town_square",
+      "stable_key": "town_square",
+      "name": "中心广场",
+      "description": "小镇的心脏地带，喷泉旁各色人等来来往往。公告板上贴满了招工启事和改造广告。",
+      "location_type": "square",
+      "connects_to": [
+        "town_entrance",
+        "body_shop",
+        "drug_den",
+        "pleasure_tavern",
+        "brothel",
+        "labor_hall",
+        "clinic",
+        "black_market"
+      ],
+      "tags": [
+        "hub",
+        "social"
+      ]
+    },
+    {
+      "id": "body_shop",
+      "stable_key": "body_shop",
+      "name": "肉体改造店",
+      "description": "门面装饰着镀金人体浮雕，橱窗里展示着各种改造前后的对比图——更强壮的肌肉、更敏锐的感官、更诱人的身材。价格不菲但效果持久。",
+      "location_type": "shop",
+      "connects_to": [
+        "town_square"
+      ],
+      "tags": [
+        "modification",
+        "expensive"
+      ]
+    },
+    {
+      "id": "drug_den",
+      "stable_key": "drug_den",
+      "name": "炼金药剂铺",
+      "description": "灯光昏暗的铺子，货架上摆满了五彩斑斓的药水瓶。墙壁上贴着标语：「短期强化，即时生效——后果自负」。价格相对便宜，但效果是暂时的。",
+      "location_type": "shop",
+      "connects_to": [
+        "town_square"
+      ],
+      "tags": [
+        "drug",
+        "cheap"
+      ]
+    },
+    {
+      "id": "pleasure_tavern",
+      "stable_key": "pleasure_tavern",
+      "name": "欲望酒馆",
+      "description": "镇子里最热闹的地方，酒气、汗水和荷尔蒙混在一起。在这里可以打听到各种赚钱的路子，也有人在这里物色合意的玩伴。",
+      "location_type": "tavern",
+      "connects_to": [
+        "town_square"
+      ],
+      "tags": [
+        "social",
+        "information",
+        "recruitment"
+      ]
+    },
+    {
+      "id": "brothel",
+      "stable_key": "brothel",
+      "name": "玫瑰红馆",
+      "description": "红幔低垂，香气浓烈。这里是小镇最赚钱的地方之一——只要你愿意出卖自己的身体和时间。报酬丰厚，但会磨损灵魂。",
+      "location_type": "brothel",
+      "connects_to": [
+        "town_square"
+      ],
+      "tags": [
+        "sex_work",
+        "corruption",
+        "high_income"
+      ]
+    },
+    {
+      "id": "labor_hall",
+      "stable_key": "labor_hall",
+      "name": "劳工大厅",
+      "description": "灰扑扑的大厅里挤满了找活干的男女。工作辛苦、报酬微薄，但每一分钱都来得干净。",
+      "location_type": "guild",
+      "connects_to": [
+        "town_square"
+      ],
+      "tags": [
+        "work",
+        "honest",
+        "low_income"
+      ]
+    },
+    {
+      "id": "black_market",
+      "stable_key": "black_market",
+      "name": "暗巷黑市",
+      "description": "藏在广场地下通道里的非法交易场所。这里有最极端、最危险的改造方案——没人会问你钱从哪来。",
+      "location_type": "black_market",
+      "connects_to": [
+        "town_square"
+      ],
+      "tags": [
+        "illegal",
+        "extreme_modification"
+      ]
+    },
+    {
+      "id": "clinic",
+      "stable_key": "clinic",
+      "name": "伊娃诊所",
+      "description": "一个小而整洁的诊所，负责处理改造后的排异反应和药物副作用。伊娃医生对小镇的堕落持保留态度。",
+      "location_type": "clinic",
+      "connects_to": [
+        "town_square"
+      ],
+      "tags": [
+        "health",
+        "recovery"
+      ]
+    }
+  ],
+  "characters": [
+    {
+      "id": "player",
+      "stable_key": "player",
+      "name": "玩家",
+      "role": "newcomer",
+      "start_location": "town_entrance",
+      "faction_id": null,
+      "goals": [
+        {
+          "goal_id": "survive_and_thrive",
+          "priority": 0.9,
+          "risk_tolerance": 0.5
+        }
+      ],
+      "personality": {
+        "ambitious": 0.7,
+        "desperate": 0.6
+      },
+      "initial_beliefs": [
+        "这个小镇看起来不太对劲，但我别无选择。",
+        "我必须想办法搞到钱。"
+      ]
+    },
+    {
+      "id": "body_artist_lila",
+      "stable_key": "body_artist_lila",
+      "name": "改造师莉拉",
+      "role": "body_artist",
+      "start_location": "body_shop",
+      "faction_id": "town_council",
+      "goals": [
+        {
+          "goal_id": "sell_modifications",
+          "priority": 0.8,
+          "risk_tolerance": 0.3
+        }
+      ],
+      "personality": {
+        "professional": 0.7,
+        "seductive": 0.5
+      },
+      "initial_beliefs": [
+        "身体是最值得投资的资本。",
+        "有钱的客人值得最好的服务。"
+      ]
+    },
+    {
+      "id": "drug_dealer_vex",
+      "stable_key": "drug_dealer_vex",
+      "name": "药剂师维克斯",
+      "role": "drug_dealer",
+      "start_location": "drug_den",
+      "faction_id": "underworld",
+      "goals": [
+        {
+          "goal_id": "sell_drugs",
+          "priority": 0.85,
+          "risk_tolerance": 0.5
+        }
+      ],
+      "personality": {
+        "sleazy": 0.8,
+        "opportunistic": 0.7
+      },
+      "initial_beliefs": [
+        "短期的快乐和力量才是真实的。",
+        "穷鬼的命不值钱，但穷鬼的钱也是钱。"
+      ]
+    },
+    {
+      "id": "tavern_owner_greta",
+      "stable_key": "tavern_owner_greta",
+      "name": "酒馆老板娘格蕾塔",
+      "role": "tavern_owner",
+      "start_location": "pleasure_tavern",
+      "faction_id": "town_council",
+      "goals": [
+        {
+          "goal_id": "run_tavern",
+          "priority": 0.7,
+          "risk_tolerance": 0.3
+        }
+      ],
+      "personality": {
+        "motherly": 0.7,
+        "shrewd": 0.6
+      },
+      "initial_beliefs": [
+        "每个来酒馆的人都有故事，也都有需求。",
+        "新人总是需要指点的——免费的建议，能换来长期的顾客。"
+      ]
+    },
+    {
+      "id": "madam_rose",
+      "stable_key": "madam_rose",
+      "name": "玫瑰夫人",
+      "role": "brothel_madam",
+      "start_location": "brothel",
+      "faction_id": "underworld",
+      "goals": [
+        {
+          "goal_id": "recruit_workers",
+          "priority": 0.8,
+          "risk_tolerance": 0.4
+        }
+      ],
+      "personality": {
+        "elegant": 0.7,
+        "manipulative": 0.8
+      },
+      "initial_beliefs": [
+        "年轻的身体是最好的商品。",
+        "来这里的每个人最终都会回来——不是因为需要钱，就是因为上了瘾。"
+      ]
+    },
+    {
+      "id": "labor_boss_bruno",
+      "stable_key": "labor_boss_bruno",
+      "name": "工头布鲁诺",
+      "role": "labor_boss",
+      "start_location": "labor_hall",
+      "faction_id": "workers_guild",
+      "goals": [
+        {
+          "goal_id": "manage_labor",
+          "priority": 0.7,
+          "risk_tolerance": 0.2
+        }
+      ],
+      "personality": {
+        "gruff": 0.7,
+        "fair": 0.6
+      },
+      "initial_beliefs": [
+        "诚实的工作也许赚得少，但能让你睡得安稳。",
+        "我见过太多年轻人被红馆和黑市毁了。"
+      ]
+    },
+    {
+      "id": "black_market_shade",
+      "stable_key": "black_market_shade",
+      "name": "暗影商人",
+      "role": "black_market_dealer",
+      "start_location": "black_market",
+      "faction_id": "underworld",
+      "goals": [
+        {
+          "goal_id": "sell_extreme_mods",
+          "priority": 0.9,
+          "risk_tolerance": 0.6
+        }
+      ],
+      "personality": {
+        "mysterious": 0.8,
+        "dangerous": 0.7
+      },
+      "initial_beliefs": [
+        "最强大的改造都在禁忌的边缘。",
+        "有钱就有资格变强——不问来路。"
+      ]
+    },
+    {
+      "id": "doctor_eva",
+      "stable_key": "doctor_eva",
+      "name": "伊娃医生",
+      "role": "doctor",
+      "start_location": "clinic",
+      "faction_id": "town_council",
+      "goals": [
+        {
+          "goal_id": "heal_patients",
+          "priority": 0.85,
+          "risk_tolerance": 0.2
+        }
+      ],
+      "personality": {
+        "compassionate": 0.8,
+        "concerned": 0.6
+      },
+      "initial_beliefs": [
+        "这个小镇的改造文化正在毁掉年轻人。",
+        "我会尽力治疗每一个病人，无论他们做了什么选择。"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "ct_coin_pouch",
+      "stable_key": "ct_coin_pouch",
+      "name": "钱袋",
+      "item_type": "currency",
+      "owner_id": "player",
+      "tags": [
+        "money"
+      ]
+    },
+    {
+      "id": "body_mod_voucher_basic",
+      "stable_key": "body_mod_voucher_basic",
+      "name": "基础改造券",
+      "item_type": "voucher",
+      "location_id": "body_shop",
+      "tags": [
+        "modification",
+        "consumable"
+      ]
+    },
+    {
+      "id": "body_mod_voucher_elite",
+      "stable_key": "body_mod_voucher_elite",
+      "name": "精英改造券",
+      "item_type": "voucher",
+      "location_id": "body_shop",
+      "tags": [
+        "modification",
+        "expensive"
+      ]
+    },
+    {
+      "id": "drug_pack_stim",
+      "stable_key": "drug_pack_stim",
+      "name": "感官强化剂",
+      "item_type": "drug",
+      "location_id": "drug_den",
+      "tags": [
+        "drug",
+        "temporary",
+        "cheap"
+      ]
+    },
+    {
+      "id": "drug_pack_endurance",
+      "stable_key": "drug_pack_endurance",
+      "name": "耐力药剂",
+      "item_type": "drug",
+      "location_id": "drug_den",
+      "tags": [
+        "drug",
+        "temporary"
+      ]
+    },
+    {
+      "id": "drug_pack_charm",
+      "stable_key": "drug_pack_charm",
+      "name": "魅惑香水",
+      "item_type": "drug",
+      "location_id": "drug_den",
+      "tags": [
+        "drug",
+        "temporary",
+        "social"
+      ]
+    },
+    {
+      "id": "extreme_mod_contract",
+      "stable_key": "extreme_mod_contract",
+      "name": "极端改造契约",
+      "item_type": "contract",
+      "location_id": "black_market",
+      "tags": [
+        "illegal",
+        "permanent",
+        "risky"
+      ]
+    },
+    {
+      "id": "health_tonic",
+      "stable_key": "health_tonic",
+      "name": "健康补剂",
+      "item_type": "medicine",
+      "location_id": "clinic",
+      "tags": [
+        "health",
+        "recovery"
+      ]
+    },
+    {
+      "id": "work_permit",
+      "stable_key": "work_permit",
+      "name": "劳工证",
+      "item_type": "permit",
+      "location_id": "labor_hall",
+      "tags": [
+        "work",
+        "honest"
+      ]
+    },
+    {
+      "id": "brothel_contract",
+      "stable_key": "brothel_contract",
+      "name": "红馆契约",
+      "item_type": "contract",
+      "location_id": "brothel",
+      "tags": [
+        "sex_work",
+        "corruption"
+      ]
+    },
+    {
+      "id": "tavern_tip_jar",
+      "stable_key": "tavern_tip_jar",
+      "name": "酒馆小费罐",
+      "item_type": "money",
+      "location_id": "pleasure_tavern",
+      "tags": [
+        "money"
+      ]
+    },
+    {
+      "id": "rumor_scroll",
+      "stable_key": "rumor_scroll",
+      "name": "传闻卷轴",
+      "item_type": "info",
+      "location_id": "pleasure_tavern",
+      "tags": [
+        "information"
+      ]
+    }
+  ],
+  "factions": [
+    {
+      "id": "town_council",
+      "stable_key": "town_council",
+      "name": "小镇议会",
+      "faction_type": "government",
+      "goals": [
+        "maintain_order",
+        "tax_revenue"
+      ],
+      "relations": [
+        {
+          "target": "underworld",
+          "relation": "tolerates",
+          "value": -0.3
+        },
+        {
+          "target": "workers_guild",
+          "relation": "supports",
+          "value": 0.5
+        }
+      ]
+    },
+    {
+      "id": "underworld",
+      "stable_key": "underworld",
+      "name": "地下势力",
+      "faction_type": "crime",
+      "goals": [
+        "maximize_profit",
+        "expand_influence"
+      ],
+      "relations": [
+        {
+          "target": "town_council",
+          "relation": "bribes",
+          "value": 0.2
+        },
+        {
+          "target": "workers_guild",
+          "relation": "undermines",
+          "value": -0.6
+        }
+      ]
+    },
+    {
+      "id": "workers_guild",
+      "stable_key": "workers_guild",
+      "name": "工人行会",
+      "faction_type": "guild",
+      "goals": [
+        "protect_workers",
+        "fair_wages"
+      ],
+      "relations": [
+        {
+          "target": "town_council",
+          "relation": "cooperates",
+          "value": 0.3
+        },
+        {
+          "target": "underworld",
+          "relation": "opposes",
+          "value": -0.7
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "entity": "player",
+      "attr": "gold",
+      "value": 5
+    },
+    {
+      "entity": "player",
+      "attr": "corruption",
+      "value": 0
+    },
+    {
+      "entity": "player",
+      "attr": "honor",
+      "value": 0
+    },
+    {
+      "entity": "player",
+      "attr": "body_mod_level",
+      "value": 0
+    },
+    {
+      "entity": "player",
+      "attr": "health",
+      "value": 100
+    }
+  ],
+  "rules": [],
+  "action_templates": [
+    {
+      "action_id": "move_to_location",
+      "label_template": "前往地点",
+      "target_selector": {
+        "type": "connected_location"
+      },
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "connected_location",
+          "actor": "$actor",
+          "target": "$target",
+          "reason": "目标地点无法从当前位置直接到达。"
+        }
+      ],
+      "effects": [
+        {
+          "type": "move_entity",
+          "entity": "$actor",
+          "to": "$target",
+          "actor": "$actor"
+        }
+      ],
+      "risk": "low",
+      "reason": "移动是基本能力。"
+    },
+    {
+      "action_id": "talk_to_lila",
+      "label_template": "与改造师莉拉交谈",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "body_artist_lila",
+          "reason": "莉拉不在当前位置。"
+        }
+      ],
+      "effects": [],
+      "risk": "low",
+      "reason": "了解身体改造的价格和选项。"
+    },
+    {
+      "action_id": "talk_to_vex",
+      "label_template": "与药剂师维克斯交谈",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "drug_dealer_vex",
+          "reason": "维克斯不在当前位置。"
+        }
+      ],
+      "effects": [],
+      "risk": "low",
+      "reason": "了解药物强化的价格和风险。"
+    },
+    {
+      "action_id": "talk_to_greta",
+      "label_template": "与酒馆老板娘格蕾塔交谈",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "tavern_owner_greta",
+          "reason": "格蕾塔不在当前位置。"
+        }
+      ],
+      "effects": [],
+      "risk": "low",
+      "reason": "打听小镇的情报和赚钱机会。"
+    },
+    {
+      "action_id": "talk_to_rose",
+      "label_template": "与玫瑰夫人交谈",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "madam_rose",
+          "reason": "玫瑰夫人不在当前位置。"
+        }
+      ],
+      "effects": [],
+      "risk": "low",
+      "reason": "了解红馆的工作条件。"
+    },
+    {
+      "action_id": "talk_to_bruno",
+      "label_template": "与工头布鲁诺交谈",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "labor_boss_bruno",
+          "reason": "布鲁诺不在当前位置。"
+        }
+      ],
+      "effects": [],
+      "risk": "low",
+      "reason": "了解劳工工作的报酬和条件。"
+    },
+    {
+      "action_id": "talk_to_shade",
+      "label_template": "与暗影商人交谈",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "black_market_shade",
+          "reason": "暗影商人不在当前位置。"
+        }
+      ],
+      "effects": [],
+      "risk": "medium",
+      "reason": "了解极端改造的选项和代价。"
+    },
+    {
+      "action_id": "talk_to_eva",
+      "label_template": "与伊娃医生交谈",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "doctor_eva",
+          "reason": "伊娃医生不在当前位置。"
+        }
+      ],
+      "effects": [],
+      "risk": "low",
+      "reason": "了解健康风险和恢复选项。"
+    },
+    {
+      "action_id": "work_labor",
+      "label_template": "做一天苦力",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "labor_boss_bruno",
+          "reason": "必须在劳工大厅见到布鲁诺。"
+        }
+      ],
+      "effects": [
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "gold",
+          "delta": 8,
+          "actor": "system"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "honor",
+          "delta": 1,
+          "actor": "system"
+        },
+        {
+          "type": "add_memory",
+          "owner": "$actor",
+          "memory_text": "辛苦工作了一天，虽然钱不多但很踏实。",
+          "truth_scope": "player",
+          "salience": 0.6,
+          "actor": "system"
+        }
+      ],
+      "risk": "low",
+      "reason": "诚实劳动，稳定但收入低。"
+    },
+    {
+      "action_id": "sell_body_once",
+      "label_template": "在红馆接一次客",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "madam_rose",
+          "reason": "必须在红馆见到玫瑰夫人。"
+        }
+      ],
+      "effects": [
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "gold",
+          "delta": 25,
+          "actor": "system"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "corruption",
+          "delta": 2,
+          "actor": "system"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "health",
+          "delta": -3,
+          "actor": "system"
+        },
+        {
+          "type": "add_memory",
+          "owner": "$actor",
+          "memory_text": "第一次在红馆接客，赚了不少钱，但心里有些空落落的。",
+          "truth_scope": "player",
+          "salience": 0.8,
+          "valence": -0.3,
+          "actor": "system"
+        }
+      ],
+      "risk": "medium",
+      "reason": "收入高但有身心代价。"
+    },
+    {
+      "action_id": "buy_body_mod_basic",
+      "label_template": "购买基础身体改造",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "body_artist_lila",
+          "reason": "必须在改造店见到莉拉。"
+        },
+        {
+          "type": "resource_at_least",
+          "entity": "$actor",
+          "attr": "gold",
+          "value": 30,
+          "reason": "需要至少30金币。"
+        }
+      ],
+      "effects": [
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "gold",
+          "delta": -30,
+          "actor": "$actor"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "body_mod_level",
+          "delta": 1,
+          "actor": "system"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "health",
+          "delta": -5,
+          "actor": "system"
+        },
+        {
+          "type": "add_memory",
+          "owner": "$actor",
+          "memory_text": "接受了基础身体改造，感觉比以前更强了。",
+          "truth_scope": "player",
+          "salience": 0.7,
+          "actor": "system"
+        }
+      ],
+      "risk": "medium",
+      "reason": "永久改造，提升能力但花费高且有健康代价。"
+    },
+    {
+      "action_id": "buy_drug_stim",
+      "label_template": "购买感官强化剂",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "drug_dealer_vex",
+          "reason": "必须在药剂铺见到维克斯。"
+        },
+        {
+          "type": "resource_at_least",
+          "entity": "$actor",
+          "attr": "gold",
+          "value": 10,
+          "reason": "需要至少10金币。"
+        }
+      ],
+      "effects": [
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "gold",
+          "delta": -10,
+          "actor": "$actor"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "corruption",
+          "delta": 1,
+          "actor": "system"
+        },
+        {
+          "type": "add_memory",
+          "owner": "$actor",
+          "memory_text": "使用感官强化剂后，感觉世界变得更加鲜活……但药效消退后头很痛。",
+          "truth_scope": "player",
+          "salience": 0.7,
+          "actor": "system"
+        }
+      ],
+      "risk": "low",
+      "reason": "便宜的短期强化，有副作用。"
+    },
+    {
+      "action_id": "buy_extreme_mod",
+      "label_template": "签订极端改造契约",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "black_market_shade",
+          "reason": "必须在黑市见到暗影商人。"
+        },
+        {
+          "type": "resource_at_least",
+          "entity": "$actor",
+          "attr": "gold",
+          "value": 80,
+          "reason": "需要至少80金币。"
+        }
+      ],
+      "effects": [
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "gold",
+          "delta": -80,
+          "actor": "$actor"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "body_mod_level",
+          "delta": 3,
+          "actor": "system"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "corruption",
+          "delta": 5,
+          "actor": "system"
+        },
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "health",
+          "delta": -20,
+          "actor": "system"
+        },
+        {
+          "type": "add_memory",
+          "owner": "$actor",
+          "memory_text": "极端改造让我脱胎换骨——但代价是什么？身体里有什么东西永远变了。",
+          "truth_scope": "player",
+          "salience": 0.9,
+          "valence": -0.4,
+          "actor": "system"
+        }
+      ],
+      "risk": "high",
+      "reason": "最强大的改造，但代价巨大且不可逆。"
+    },
+    {
+      "action_id": "visit_clinic",
+      "label_template": "接受体检和治疗",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "doctor_eva",
+          "reason": "必须在诊所见到伊娃医生。"
+        },
+        {
+          "type": "resource_at_least",
+          "entity": "$actor",
+          "attr": "gold",
+          "value": 15,
+          "reason": "需要至少15金币的诊疗费。"
+        }
+      ],
+      "effects": [
+        {
+          "type": "delta_resource",
+          "entity": "$actor",
+          "attr": "gold",
+          "delta": -15,
+          "actor": "$actor"
+        },
+        {
+          "type": "set_state",
+          "entity": "$actor",
+          "attr": "health",
+          "value": 100,
+          "actor": "system"
+        },
+        {
+          "type": "add_memory",
+          "owner": "$actor",
+          "memory_text": "伊娃医生帮我处理了改造的后遗症。她看着我的眼神里满是担忧。",
+          "truth_scope": "player",
+          "salience": 0.6,
+          "actor": "system"
+        }
+      ],
+      "risk": "low",
+      "reason": "恢复健康，但需要花费。"
+    },
+    {
+      "action_id": "gather_info_tavern",
+      "label_template": "在酒馆打听消息",
+      "target_selector": {},
+      "arg_schema": {},
+      "preconditions": [
+        {
+          "type": "same_location",
+          "a": "$actor",
+          "b": "tavern_owner_greta",
+          "reason": "必须在酒馆见到格蕾塔。"
+        }
+      ],
+      "effects": [
+        {
+          "type": "add_memory",
+          "owner": "$actor",
+          "memory_text": "格蕾塔告诉我：想稳定赚钱去找布鲁诺，想赚快钱就去红馆找玫瑰夫人。如果够胆，黑市有最强的改造。",
+          "truth_scope": "player",
+          "salience": 0.8,
+          "actor": "system"
+        }
+      ],
+      "risk": "low",
+      "reason": "获取小镇的关键情报。"
+    }
+  ],
+  "initial_states": [
+    {
+      "entity": "player",
+      "attr": "location",
+      "value": "town_entrance"
+    },
+    {
+      "entity": "player",
+      "attr": "gold",
+      "value": 5
+    },
+    {
+      "entity": "player",
+      "attr": "corruption",
+      "value": 0
+    },
+    {
+      "entity": "player",
+      "attr": "honor",
+      "value": 0
+    },
+    {
+      "entity": "player",
+      "attr": "body_mod_level",
+      "value": 0
+    },
+    {
+      "entity": "player",
+      "attr": "health",
+      "value": 100
+    }
+  ],
+  "initial_memories": [],
+  "initial_tensions": [
+    {
+      "id": "new_arrival_curiosity",
+      "tension_type": "newcomer_arrival",
+      "description": "玩家初到堕落小镇，身无分文，必须尽快找到生存之道。小镇各方势力都在关注这个新面孔。",
+      "affected_entities": [
+        "player",
+        "tavern_owner_greta",
+        "labor_boss_bruno",
+        "madam_rose"
+      ],
+      "evidence": [
+        {
+          "type": "state",
+          "entity": "player",
+          "attr": "gold",
+          "value": 5
+        }
+      ],
+      "suggested_actions": [
+        "talk_to_greta",
+        "gather_info_tavern"
+      ],
+      "priority": 0.9
+    },
+    {
+      "id": "moral_crossroads",
+      "tension_type": "moral_choice",
+      "description": "在堕落小镇，每一条赚钱的路都通向不同的未来。诚实劳动还是出卖身体？温和强化还是极端改造？每个选择都在塑造玩家的命运。",
+      "affected_entities": [
+        "player",
+        "labor_hall",
+        "brothel",
+        "black_market",
+        "body_shop"
+      ],
+      "evidence": [
+        {
+          "type": "state",
+          "entity": "player",
+          "attr": "corruption",
+          "value": 0
+        }
+      ],
+      "suggested_actions": [
+        "work_labor",
+        "sell_body_once"
+      ],
+      "priority": 0.85
+    },
+    {
+      "id": "underworld_watching",
+      "tension_type": "faction_interest",
+      "description": "地下势力注意到了这个身无分文的新来者。维克斯和玫瑰夫人都在想方设法把玩家拉入他们的圈子。",
+      "affected_entities": [
+        "underworld",
+        "drug_dealer_vex",
+        "madam_rose",
+        "black_market_shade"
+      ],
+      "evidence": [
+        {
+          "type": "state",
+          "entity": "player",
+          "attr": "gold",
+          "value": 5
+        }
+      ],
+      "suggested_actions": [
+        "talk_to_vex",
+        "talk_to_rose",
+        "talk_to_shade"
+      ],
+      "priority": 0.6
+    }
+  ],
+  "initial_quests": [
+    {
+      "id": "first_job",
+      "title": "第一份工作",
+      "issuer_id": "tavern_owner_greta",
+      "tension_id": "new_arrival_curiosity",
+      "objectives": [
+        {
+          "type": "visit_location",
+          "target": "labor_hall"
+        },
+        {
+          "type": "visit_location",
+          "target": "brothel"
+        }
+      ],
+      "rewards": [
+        {
+          "type": "delta_resource",
+          "entity": "player",
+          "attr": "gold",
+          "delta": 8
+        }
+      ],
+      "failure_consequences": [],
+      "evidence": [
+        {
+          "tension_id": "new_arrival_curiosity"
+        }
+      ]
+    },
+    {
+      "id": "earn_first_mod",
+      "title": "攒钱改造",
+      "issuer_id": "body_artist_lila",
+      "tension_id": "moral_crossroads",
+      "objectives": [
+        {
+          "type": "visit_location",
+          "target": "body_shop"
+        }
+      ],
+      "rewards": [
+        {
+          "type": "grant_permission",
+          "entity": "player",
+          "attr": "can_buy_mod",
+          "target": "body_shop"
+        }
+      ],
+      "failure_consequences": [],
+      "evidence": [
+        {
+          "tension_id": "moral_crossroads"
+        }
+      ]
+    }
+  ],
+  "background_lore": [
+    "安布罗斯镇是一个游离于王国法律之外的魔法小镇，以身体改造技术和炼金药物闻名。",
+    "镇子里有三个主要势力：维持表面秩序的小镇议会、控制灰色交易的地下势力、以及代表底层劳工的工人行会。",
+    "身体改造技术源自古代炼金术，可以永久改变一个人的外貌和能力——但每次改造都会在身体和灵魂上留下痕迹。",
+    "有人说，在安布罗斯镇待久了，你会变成完全不同的人。不是比喻。"
+  ]
+}

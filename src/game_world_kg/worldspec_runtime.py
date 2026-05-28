@@ -38,6 +38,7 @@ class WorldSpecNormalizer:
         self._normalize_stable_keys(fixed, "factions")
         self._normalize_characters(fixed)
         self._normalize_items(fixed)
+        self._normalize_factions(fixed)
         self._normalize_action_templates(fixed)
         self._normalize_tensions(fixed)
         self._normalize_quests(fixed)
@@ -112,6 +113,34 @@ class WorldSpecNormalizer:
                         item["location_id"] = item.pop(alias)
                         break
             item.setdefault("tags", [])
+
+    def _normalize_factions(self, fixed: dict[str, Any]) -> None:
+        for faction in fixed.get("factions", []) or []:
+            if not isinstance(faction, dict):
+                continue
+            faction.setdefault("goals", [])
+            faction.setdefault("relations", [])
+            for relation in faction.get("relations", []) or []:
+                if not isinstance(relation, dict):
+                    continue
+                # Map common LLM aliases → canonical "relation" field
+                if "relation" not in relation:
+                    for alias in ("type", "name", "relation_type", "kind", "label"):
+                        if alias in relation:
+                            relation["relation"] = relation.pop(alias)
+                            break
+                # If still no "relation", infer a default from value sign
+                if "relation" not in relation:
+                    value = relation.get("value", 0)
+                    relation["relation"] = "opposes" if value < 0 else "neutral"
+                # Ensure "target" exists — map common aliases
+                if "target" not in relation:
+                    for alias in ("faction_id", "faction", "id", "target_id", "to"):
+                        if alias in relation:
+                            relation["target"] = relation.pop(alias)
+                            break
+                relation.setdefault("target", "")
+                relation.setdefault("value", 0)
 
     def _normalize_action_templates(self, fixed: dict[str, Any]) -> None:
         for template in fixed.get("action_templates", []) or []:
