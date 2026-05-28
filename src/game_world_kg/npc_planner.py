@@ -70,9 +70,9 @@ class NPCPlanner:
 
     def tick_npc(self, world_id: str, npc_id: str) -> dict[str, Any]:
         context = self.context(world_id, npc_id)
-        action = self._choose_action(context)
+        action, breakdown = self._choose_action(context)
         if action is None:
-            return {"world_id": world_id, "npc_id": npc_id, "acted": False, "reason": "no_valid_affordance", "context": context.as_dict()}
+            return {"world_id": world_id, "npc_id": npc_id, "acted": False, "reason": "no_valid_affordance", "context": context.as_dict(), "scoring_breakdown": {}}
         log = EventLog(self.conn)
         turn_id = log.create_turn(world_id, f"npc_tick:{npc_id}:{action['action_id']}")
         row = self.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
@@ -94,6 +94,7 @@ class NPCPlanner:
                 "action": action,
                 "reason": resolution.reason if resolution else "no_template",
                 "context": context.as_dict(),
+                "scoring_breakdown": breakdown,
             }
         relation_deltas = self._relation_deltas(world_id, npc_id, action)
         marker = log.append(
@@ -119,6 +120,7 @@ class NPCPlanner:
                 for event in [*resolution.events, marker, *rumor_events]
             ],
             "context": context.as_dict(),
+            "scoring_breakdown": breakdown,
         }
 
     def tick_world(self, world_id: str, limit: int = 3) -> dict[str, Any]:
@@ -260,11 +262,61 @@ class NPCPlanner:
             deltas.append(StateDelta(entity_id=target_id, attr=f"respect.{npc_id}", old_value=current_r if isinstance(current_r, (int, float)) else 0, new_value=(current_r if isinstance(current_r, (int, float)) else 0) + 1))
         return deltas
 
+    def explain_npc_action(self, world_id: str, npc_id: str) -> dict[str, Any]:
+        """Explain why an NPC would choose specific actions, tracing to goals/memories/tensions."""
+        context = self.context(world_id, npc_id)
+        action, breakdown = self._choose_action(context)
+        # Find which specific goals, memories, and tensions contributed
+        contributing_goals: list[dict[str, Any]] = []
+        for goal in context.goals:
+            relevance = EffectToGoalMatcher.score(action or {}, [goal])
+            if relevance > 0:
+                contributing_goals.append({"goal_id": goal.get("goal_id", ""), "priority": goal.get("priority", 0.5), "relevance": round(relevance, 3)})
+        contributing_goals.sort(key=lambda g: -g["relevance"])
+
+        contributing_tensions: list[dict[str, Any]] = []
+        for tension in context.visible_tensions:
+            relevance = TensionRelevanceScorer.score(action or {}, [tension])
+            if relevance > 0:
+                contributing_tensions.append({"tension_id": tension.get("tension_id") or tension.get("id", ""), "reason": tension.get("reason", ""), "priority": tension.get("priority", 0.5), "relevance": round(relevance, 3)})
+        contributing_tensions.sort(key=lambda t: -t["relevance"])
+
+        contributing_memories: list[dict[str, Any]] = []
+        for memory in context.known_memories:
+            relevance = MemoryRelevanceScorer.score(action or {}, [memory])
+            if relevance > 0:
+                contributing_memories.append({"memory_id": memory.get("id", ""), "memory_text": memory.get("memory_text", ""), "truth_scope": memory.get("truth_scope", ""), "salience": memory.get("salience", 0.5), "relevance": round(relevance, 3)})
+        contributing_memories.sort(key=lambda m: -m["relevance"])
+
+        has_goal_binding = len(contributing_goals) > 0
+        has_tension_binding = len(contributing_tensions) > 0
+        has_memory_binding = len(contributing_memories) > 0
+
+        return {
+            "world_id": world_id,
+            "npc_id": npc_id,
+            "chosen_action": action,
+            "scoring_breakdown": breakdown,
+            "bound_to_goal": has_goal_binding,
+            "bound_to_memory": has_memory_binding,
+            "bound_to_tension": has_tension_binding,
+            "contributing_goals": contributing_goals,
+            "contributing_tensions": contributing_tensions,
+            "contributing_memories": contributing_memories,
+            "context_summary": {
+                "goals_count": len(context.goals),
+                "tensions_count": len(context.visible_tensions),
+                "memories_count": len(context.known_memories),
+                "actions_count": len(context.available_actions),
+            },
+        }
+
     @staticmethod
-    def _choose_action(context: PlannerContext) -> dict[str, Any] | None:
+    def _choose_action(context: PlannerContext) -> tuple[dict[str, Any] | None, dict[str, float]]:
         if not context.available_actions:
-            return None
+            return None, {}
         ranked: list[dict[str, Any]] = []
+        breakdowns: dict[str, dict[str, float]] = {}
         for action in context.available_actions:
             goal_relevance = EffectToGoalMatcher.score(action, context.goals)
             tension_relevance = TensionRelevanceScorer.score(action, context.visible_tensions)
@@ -280,9 +332,19 @@ class NPCPlanner:
                 - 0.20 * risk_penalty
                 - 0.10 * resource_cost
             )
-            ranked.append(action | {"score": round(max(0, score), 4)})
+            score = round(max(0, score), 4)
+            ranked.append(action | {"score": score})
+            breakdowns[action["action_id"]] = {
+                "goal_relevance": round(goal_relevance, 3),
+                "tension_relevance": round(tension_relevance, 3),
+                "memory_relevance": round(memory_relevance, 3),
+                "benefit": round(benefit, 3),
+                "risk_penalty": round(risk_penalty, 3),
+                "resource_cost": round(resource_cost, 3),
+                "total_score": score,
+            }
         ranked.sort(key=lambda item: (-item["score"], item["action_id"], item.get("target_id") or ""))
-        return ranked[0]
+        return ranked[0], breakdowns.get(ranked[0]["action_id"], {})
 
 
 class EffectToGoalMatcher:
@@ -336,13 +398,23 @@ class TensionRelevanceScorer:
 class MemoryRelevanceScorer:
     @staticmethod
     def score(action: dict[str, Any], memories: list[dict[str, Any]]) -> float:
-        text = f"{action.get('action_id', '')} {action.get('reason', '')} {action.get('target_id', '')}"
+        # Build candidate tokens from action_id (underscore-split), label, reason, and target_id
+        label = action.get("label", "")
+        reason = action.get("reason", "")
+        target_id = action.get("target_id", "")
+        text = f"{action.get('action_id', '')} {label} {reason} {target_id}"
+        underscore_tokens = text.split("_")
+        # Also extract Chinese bigrams from label for cross-language matching
+        chinese_tokens: list[str] = []
+        for char_i in range(len(label) - 1):
+            chinese_tokens.append(label[char_i:char_i + 2])
+        search_tokens = [t for t in underscore_tokens + chinese_tokens if t and len(t) >= 1]
         if not memories:
             return 0.0
         hits = 0.0
         for memory in memories:
             memory_text = memory.get("memory_text", "")
-            if any(token and token in memory_text for token in text.split("_")):
+            if any(token and token in memory_text for token in search_tokens):
                 hits += float(memory.get("salience", 0.5))
         return min(1.0, hits / max(1, len(memories)))
 

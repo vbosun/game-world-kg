@@ -93,6 +93,30 @@ class CandidateRepository:
         self.conn.execute(f"UPDATE worldspec_candidates SET {sets} WHERE candidate_id = ?", params)
 
     def submit_repaired_json(self, candidate_id: str, spec_json: dict[str, Any], validation_report_json: dict[str, Any] | None = None) -> None:
+        import hashlib, json as _json
+        # Record current version in patch history before overwriting
+        current = self.get(candidate_id)
+        if current is not None:
+            old_spec = current.get("spec_json")
+            old_spec_str = old_spec if isinstance(old_spec, str) else to_json(old_spec or {})
+            old_spec_obj = old_spec if isinstance(old_spec, dict) else (_json.loads(old_spec_str) if isinstance(old_spec_str, str) and old_spec_str else {})
+            old_hash = hashlib.sha256(
+                _json.dumps(old_spec_obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            old_report = current.get("validation_report_json") or "{}"
+            old_report_str = old_report if isinstance(old_report, str) else to_json(old_report)
+            # Get next version number
+            max_ver = self.conn.execute(
+                "SELECT COALESCE(MAX(version), 0) FROM candidate_patch_history WHERE candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()[0]
+            self.conn.execute(
+                """
+                INSERT INTO candidate_patch_history(id, candidate_id, version, spec_json, spec_hash, validation_report_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"patch_{uuid4().hex}", candidate_id, max_ver + 1, old_spec_str, old_hash, old_report_str, utc_now()),
+            )
         if validation_report_json is not None:
             self.conn.execute(
                 "UPDATE worldspec_candidates SET spec_json = ?, validation_report_json = ?, updated_at = ? WHERE candidate_id = ?",
@@ -103,3 +127,10 @@ class CandidateRepository:
                 "UPDATE worldspec_candidates SET spec_json = ?, updated_at = ? WHERE candidate_id = ?",
                 (to_json(spec_json), utc_now(), candidate_id),
             )
+
+    def patch_history(self, candidate_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM candidate_patch_history WHERE candidate_id = ? ORDER BY version DESC",
+            (candidate_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]

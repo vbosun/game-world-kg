@@ -57,12 +57,16 @@ class DramaManager:
                 score += 0.05
             scored.append(tension | {"foreground_score": round(score, 3)})
         scored.sort(key=lambda item: (-item["foreground_score"], item.get("tension_id") or item.get("id") or ""))
-        foreground = scored[: max(1, min(limit, 3))]
+
+        main_tension, side_tension, ambient_tensions = _classify_semantic(scored, interest, current_turn)
+        foreground = [t for t in (main_tension, side_tension) if t is not None] + ambient_tensions[:max(0, limit - 2 + (0 if main_tension else 1) + (0 if side_tension else 1))]
+        foreground = foreground[:max(1, min(limit, 3))]
+
         return {
             "world_id": world_id,
-            "main_tension": scored[0] if scored else None,
-            "side_tension": scored[1] if len(scored) > 1 else None,
-            "ambient_noise": _build_ambient(scored[2:], current_turn),
+            "main_tension": main_tension,
+            "side_tension": side_tension,
+            "ambient_noise": _build_ambient(ambient_tensions, current_turn),
             "foreground_tensions": foreground,
             "player_interest": {
                 "recent_locations": interest.recent_locations,
@@ -162,3 +166,77 @@ def _build_ambient(tensions: list[dict[str, Any]], current_turn: int = 0) -> lis
             item["turns_remaining"] = remaining
         ambient.append(item)
     return ambient
+
+
+def _classify_semantic(
+    scored: list[dict[str, Any]],
+    interest: PlayerInterestTracker,
+    current_turn: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
+    """Classify tensions into main/side/ambient based on semantic signals, not just score position.
+
+    Main: high narrative weight — has stake, sponsors, player_touchpoints, or urgent deadline.
+    Side: connected to player context — has sponsors, player_touchpoints, or player-interest overlap.
+    Ambient: everything else — background pressures without immediate player relevance.
+    """
+    main: dict[str, Any] | None = None
+    side: dict[str, Any] | None = None
+    main_idx: int = -1
+    side_idx: int = -1
+
+    for idx, tension in enumerate(scored):
+        if main is None and _is_main_candidate(tension, current_turn):
+            main = tension
+            main_idx = idx
+            continue
+        if main is not None and side is None and _is_side_candidate(tension, interest):
+            side = tension
+            side_idx = idx
+
+    # Fallback: if no semantic main/side found, use positional
+    if main is None and len(scored) > 0:
+        main = scored[0]
+        main_idx = 0
+    if side is None and len(scored) > 1:
+        # Pick the first non-main
+        for idx in range(len(scored)):
+            if idx != main_idx:
+                side = scored[idx]
+                side_idx = idx
+                break
+
+    # Ambient: everything not picked as main or side
+    ambient: list[dict[str, Any]] = []
+    for idx, tension in enumerate(scored):
+        if idx != main_idx and idx != side_idx:
+            ambient.append(tension)
+
+    return main, side, ambient
+
+
+def _is_main_candidate(tension: dict[str, Any], current_turn: int) -> bool:
+    """A tension qualifies as main if it has high narrative weight signals."""
+    if tension.get("stake"):
+        return True
+    if tension.get("sponsors"):
+        return True
+    if tension.get("player_touchpoints"):
+        return True
+    deadline = tension.get("deadline_turn")
+    if deadline is not None and isinstance(deadline, (int, float)) and int(deadline) - current_turn <= 5:
+        return True
+    return False
+
+
+def _is_side_candidate(tension: dict[str, Any], interest: PlayerInterestTracker) -> bool:
+    """A tension qualifies as side if it has player-relevant connections."""
+    if tension.get("sponsors"):
+        return True
+    if tension.get("player_touchpoints"):
+        return True
+    affected = set(tension.get("affected_entities", []))
+    if affected.intersection(interest.recent_locations):
+        return True
+    if affected.intersection(interest.recent_npcs):
+        return True
+    return False

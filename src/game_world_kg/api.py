@@ -267,6 +267,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return {"candidate_id": candidate_id, "validation_report": report}
         return _handle(_do)
 
+    @app.get("/v1/worldspec/candidates/{candidate_id}/patch-history")
+    def v1_worldspec_candidate_patch_history(candidate_id: str) -> dict[str, Any]:
+        from .worldspec_draft_repository import CandidateRepository
+        def _do():
+            repo = CandidateRepository(service.conn)
+            candidate = repo.get(candidate_id)
+            if candidate is None:
+                raise KeyError(candidate_id)
+            history = repo.patch_history(candidate_id)
+            return {"candidate_id": candidate_id, "version_count": len(history), "history": history}
+        return _handle(_do)
+
     @app.post("/v1/worldspec/bootstrap")
     def v1_worldspec_bootstrap(request: WorldSpecPayloadRequest) -> dict[str, Any]:
         return _handle(lambda: service.bootstrap_worldspec(request.spec))

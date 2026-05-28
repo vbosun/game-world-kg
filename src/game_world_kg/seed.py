@@ -220,6 +220,42 @@ def _action_templates() -> list[ActionTemplate]:
                     "actor": "system",
                 },
             ],
+            cost_effects=[
+                {"type": "delta_resource", "entity": "$actor", "attr": "gold", "delta": -1, "actor": "system"},
+            ],
+            fail_effects=[
+                {
+                    "type": "add_memory",
+                    "owner": "guard_alos",
+                    "memory_text": "玩家在附近行迹可疑，试图摸我的钥匙。",
+                    "truth_scope": "npc",
+                    "salience": 0.7,
+                    "valence": -0.5,
+                    "actor": "system",
+                },
+            ],
+            catastrophic_effects=[
+                {"type": "change_relation", "src": "guard_alos", "rel": "OPPOSES", "dst": "$actor", "state_attr": "hostility.player", "delta": 5, "actor": "system"},
+                {"type": "delta_resource", "entity": "$actor", "attr": "gold", "delta": -3, "actor": "system"},
+                {
+                    "type": "add_memory",
+                    "owner": "guard_alos",
+                    "memory_text": "玩家公然试图偷取银钥匙，完全不可信！",
+                    "truth_scope": "npc",
+                    "salience": 1.0,
+                    "valence": -1.0,
+                    "actor": "system",
+                },
+                {
+                    "type": "add_memory",
+                    "owner": "$actor",
+                    "memory_text": "偷钥匙被守卫当场抓获，名声扫地。",
+                    "truth_scope": "player",
+                    "salience": 1.0,
+                    "valence": -1.0,
+                    "actor": "system",
+                },
+            ],
         ),
         ActionTemplate(
             action_id="enter_inner_city",

@@ -540,6 +540,11 @@ class GameWorldService:
             self._require_world(world_id)
             return NPCPlanner(self.conn, self).context(world_id, npc_id).as_dict()
 
+    def explain_npc_action(self, world_id: str, npc_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._require_world(world_id)
+            return NPCPlanner(self.conn, self).explain_npc_action(world_id, npc_id)
+
     def drama_foreground(self, world_id: str) -> dict[str, Any]:
         with self._lock:
             self._require_world(world_id)
@@ -643,6 +648,8 @@ class GameWorldService:
             "narration": narration,
             "events": event_payloads,
             "affordances": affordances,
+            "outcome": result.outcome.value if result.outcome else None,
+            "costs": result.costs,
         }
 
     def replay(self, world_id: str, to_turn: int | None = None) -> dict[str, Any]:

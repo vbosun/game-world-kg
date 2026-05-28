@@ -30,6 +30,9 @@ class ActionTemplate:
     effects: list[dict[str, Any]]
     target_selector: dict[str, Any] = field(default_factory=dict)
     arg_schema: dict[str, str] = field(default_factory=dict)
+    cost_effects: list[dict[str, Any]] = field(default_factory=list)
+    fail_effects: list[dict[str, Any]] = field(default_factory=list)
+    catastrophic_effects: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -52,9 +55,10 @@ class ActionTemplateStore:
             """
             INSERT INTO action_templates(
                 id, world_id, action_id, label, target_id, target_selector_json, arg_schema_json, risk, reason,
-                preconditions_json, effects_json, enabled, created_at
+                preconditions_json, effects_json, cost_effects_json, fail_effects_json, catastrophic_effects_json,
+                enabled, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
             ON CONFLICT(world_id, action_id) DO UPDATE SET
                 label = excluded.label,
                 target_id = excluded.target_id,
@@ -64,6 +68,9 @@ class ActionTemplateStore:
                 reason = excluded.reason,
                 preconditions_json = excluded.preconditions_json,
                 effects_json = excluded.effects_json,
+                cost_effects_json = excluded.cost_effects_json,
+                fail_effects_json = excluded.fail_effects_json,
+                catastrophic_effects_json = excluded.catastrophic_effects_json,
                 enabled = 1
             """,
             (
@@ -78,6 +85,9 @@ class ActionTemplateStore:
                 template.reason,
                 to_json(template.preconditions),
                 to_json(template.effects),
+                to_json(template.cost_effects),
+                to_json(template.fail_effects),
+                to_json(template.catastrophic_effects),
                 utc_now(),
             ),
         )
@@ -376,12 +386,9 @@ def validate_and_resolve_action(
 ) -> ActionResolution | None:
     """Shared action validation path for both player and NPC actions.
 
-    Looks up the ActionTemplate, evaluates preconditions, and executes effects.
+    Looks up the ActionTemplate, evaluates preconditions, computes outcome BEFORE
+    executing effects, and selects the appropriate effect plan per outcome tier.
     Does NOT include hardcoded demo handlers or keyword parsing.
-
-    Outcome v0: currently labels the resolved action result after legality/effects.
-    Full fail-forward effect planning is not implemented yet.
-    Future work: compute outcome before effect execution and select effect plans by outcome.
     """
     store = ActionTemplateStore(conn)
     predicates = PredicateEvaluator(conn)
@@ -394,9 +401,36 @@ def validate_and_resolve_action(
         if not predicates.evaluate(world_id, predicate, bindings):
             reason = predicates.failure_reason(predicate)
             return ActionResolution(action_id, False, reason, reason, [])
-    events = effects.execute(world_id, turn_id, turn_index, actor_id, template.effects, bindings, evidence)
     outcome = _compute_outcome(conn, world_id, actor_id, target_id, template, bindings)
-    return ActionResolution(action_id, True, template.reason, template.reason, events, outcome=outcome)
+    costs: list[dict[str, Any]] = []
+    events: list[EventRecord] = []
+    if outcome == ActionOutcome.FULL_SUCCESS:
+        events = effects.execute(world_id, turn_id, turn_index, actor_id, template.effects, bindings, evidence)
+    elif outcome == ActionOutcome.SUCCESS_WITH_COST:
+        events = effects.execute(world_id, turn_id, turn_index, actor_id, template.effects, bindings, evidence)
+        if template.cost_effects:
+            cost_events = effects.execute(world_id, turn_id, turn_index, actor_id, template.cost_effects, bindings, evidence)
+            events.extend(cost_events)
+            costs = [{"type": "cost", "effect": e, "reason": "success_with_cost"} for e in template.cost_effects]
+    elif outcome == ActionOutcome.FAIL_FORWARD:
+        if template.fail_effects:
+            events = effects.execute(world_id, turn_id, turn_index, actor_id, template.fail_effects, bindings, evidence)
+        else:
+            events = effects.execute(world_id, turn_id, turn_index, actor_id, template.effects, bindings, evidence)
+            if template.cost_effects:
+                cost_events = effects.execute(world_id, turn_id, turn_index, actor_id, template.cost_effects, bindings, evidence)
+                events.extend(cost_events)
+        costs = [{"type": "fail_forward", "reason": "fail_forward_effects_applied"}]
+    elif outcome == ActionOutcome.CATASTROPHIC_FAILURE:
+        if template.catastrophic_effects:
+            events = effects.execute(world_id, turn_id, turn_index, actor_id, template.catastrophic_effects, bindings, evidence)
+        else:
+            events = effects.execute(world_id, turn_id, turn_index, actor_id, template.effects, bindings, evidence)
+            if template.cost_effects:
+                cost_events = effects.execute(world_id, turn_id, turn_index, actor_id, template.cost_effects, bindings, evidence)
+                events.extend(cost_events)
+        costs = [{"type": "catastrophic", "reason": "catastrophic_failure_effects_applied"}]
+    return ActionResolution(action_id, True, template.reason, template.reason, events, outcome=outcome, costs=costs)
 
 
 def _compute_outcome(
@@ -407,10 +441,9 @@ def _compute_outcome(
     template: ActionTemplate,
     bindings: dict[str, str],
 ) -> ActionOutcome:
-    # Outcome v0: computes a label after effects have already executed.
-    # Full fail-forward would require computing outcome BEFORE effect execution
-    # and then selecting from alternate effect plans per outcome tier.
-    # This is a post-hoc label only — no alternate effect planning exists yet.
+    # Outcome is computed BEFORE effect execution. validate_and_resolve_action()
+    # selects the appropriate effect plan (main, cost, fail, catastrophic) based
+    # on the returned outcome.
     risk = template.risk
     state = StateProjector(conn)
 
@@ -607,6 +640,9 @@ def _row_to_template(row: sqlite3.Row) -> ActionTemplate:
         reason=row["reason"],
         preconditions=from_json(row["preconditions_json"], []),
         effects=from_json(row["effects_json"], []),
+        cost_effects=from_json(row["cost_effects_json"], []),
+        fail_effects=from_json(row["fail_effects_json"], []),
+        catastrophic_effects=from_json(row["catastrophic_effects_json"], []),
     )
 
 

@@ -215,6 +215,9 @@ CREATE TABLE IF NOT EXISTS action_templates (
     reason TEXT NOT NULL DEFAULT '',
     preconditions_json TEXT NOT NULL DEFAULT '[]',
     effects_json TEXT NOT NULL DEFAULT '[]',
+    cost_effects_json TEXT NOT NULL DEFAULT '[]',
+    fail_effects_json TEXT NOT NULL DEFAULT '[]',
+    catastrophic_effects_json TEXT NOT NULL DEFAULT '[]',
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     UNIQUE(world_id, action_id)

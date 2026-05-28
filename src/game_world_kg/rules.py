@@ -17,6 +17,8 @@ class RuleResult:
     reason: str
     narration: str
     events: list[EventRecord]
+    outcome: str | None = None
+    costs: list[dict[str, Any]] | None = None
 
 
 class RuleEngine:
@@ -51,6 +53,8 @@ class RuleEngine:
                 templated.reason,
                 templated.narration,
                 templated.events,
+                templated.outcome,
+                templated.costs,
             )
         if runtime_mode == "template_only":
             return self._reject(action_id, "action template not found")

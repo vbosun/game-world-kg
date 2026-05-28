@@ -52,6 +52,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _add_column(conn, "memories", "merged_from_json", "TEXT NOT NULL DEFAULT '[]'")
     _add_column(conn, "action_templates", "target_selector_json", "TEXT NOT NULL DEFAULT '{}'")
     _add_column(conn, "action_templates", "arg_schema_json", "TEXT NOT NULL DEFAULT '{}'")
+    _add_column(conn, "action_templates", "cost_effects_json", "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, "action_templates", "fail_effects_json", "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, "action_templates", "catastrophic_effects_json", "TEXT NOT NULL DEFAULT '[]'")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS conversation_segments (
@@ -197,6 +200,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_worldspec_raw_drafts_trace ON worldspec_raw_drafts(trace_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_worldspec_candidates_raw ON worldspec_candidates(raw_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_worldspec_candidates_world ON worldspec_candidates(world_id)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS candidate_patch_history (
+            id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            spec_json TEXT NOT NULL,
+            spec_hash TEXT NOT NULL,
+            validation_report_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(candidate_id) REFERENCES worldspec_candidates(candidate_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_candidate_patch_history_candidate ON candidate_patch_history(candidate_id, version)")
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
