@@ -171,9 +171,10 @@ class NPCPlanner:
         if not factions:
             return None
         faction_id = factions[hash(self._current_turn_index(world_id)) % len(factions)]
-        turn_index = self._current_turn_index(world_id)
         log = EventLog(self.conn)
         turn_id = log.create_turn(world_id, f"background:{faction_id}", "Background faction activity.")
+        turn = self.conn.execute("SELECT * FROM turns WHERE id = ?", (turn_id,)).fetchone()
+        turn_index = turn["turn_index"]
         event = log.append(
             world_id,
             turn_id,

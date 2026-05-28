@@ -378,6 +378,10 @@ def validate_and_resolve_action(
 
     Looks up the ActionTemplate, evaluates preconditions, and executes effects.
     Does NOT include hardcoded demo handlers or keyword parsing.
+
+    Outcome v0: currently labels the resolved action result after legality/effects.
+    Full fail-forward effect planning is not implemented yet.
+    Future work: compute outcome before effect execution and select effect plans by outcome.
     """
     store = ActionTemplateStore(conn)
     predicates = PredicateEvaluator(conn)
@@ -403,6 +407,10 @@ def _compute_outcome(
     template: ActionTemplate,
     bindings: dict[str, str],
 ) -> ActionOutcome:
+    # Outcome v0: computes a label after effects have already executed.
+    # Full fail-forward would require computing outcome BEFORE effect execution
+    # and then selecting from alternate effect plans per outcome tier.
+    # This is a post-hoc label only — no alternate effect planning exists yet.
     risk = template.risk
     state = StateProjector(conn)
 

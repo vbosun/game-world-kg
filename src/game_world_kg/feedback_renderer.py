@@ -6,6 +6,10 @@ from typing import Any
 class FeedbackRenderer:
     def render(self, turn_result: dict[str, Any], before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> dict[str, Any]:
         changes = self.changes(turn_result.get("events", []), before, after)
+        outcome = turn_result.get("outcome")
+        if outcome and outcome != "full_success":
+            outcome_change = {"type": "outcome", "outcome": outcome, "label": f"行动结果：{outcome}"}
+            changes.insert(0, outcome_change)
         layers = self._build_layers(changes, turn_result)
         return {
             "accepted": turn_result.get("accepted", False),
@@ -79,7 +83,44 @@ class FeedbackRenderer:
             elif event_type == "ACTION_REJECTED":
                 changes.append({"type": "rule_rejection", "label": "行动被规则拦截", "detail": payload.get("reason")})
             elif event_type == "PLAYER_GROWTH":
-                changes.append({"type": "growth", "label": "成长", "attr": payload.get("attr"), "delta": payload.get("delta"), "new_value": payload.get("new_value")})
+                for line in payload.get("growth_lines", []):
+                    if line.get("line") == "skill":
+                        changes.append({
+                            "type": "growth", "line": "skill",
+                            "label": f"技能成长：{line.get('attr', '')}",
+                            "attr": line.get("attr"), "delta": line.get("delta", 1),
+                            "detail": line,
+                        })
+                    elif line.get("line") == "identity":
+                        changes.append({
+                            "type": "identity_change", "line": "identity",
+                            "label": f"身份成长：{line.get('tag', '')}",
+                            "tag": line.get("tag"),
+                            "detail": line,
+                        })
+                    elif line.get("line") == "relationship":
+                        changes.append({
+                            "type": "relationship_change", "line": "relationship",
+                            "label": f"关系成长：{line.get('src', '')}→{line.get('dst', '')}",
+                            "rel": line.get("rel"), "delta": line.get("delta"),
+                            "detail": line,
+                        })
+                    elif line.get("line") == "knowledge":
+                        changes.append({
+                            "type": "knowledge_change", "line": "knowledge",
+                            "label": f"知识成长：{line.get('clue', '')[:40]}",
+                            "clue": line.get("clue"),
+                            "detail": line,
+                        })
+                    elif line.get("line") == "permission":
+                        changes.append({
+                            "type": "permission_change", "line": "permission",
+                            "label": f"权限成长：{line.get('permission', '')}",
+                            "permission": line.get("permission"),
+                            "detail": line,
+                        })
+                    else:
+                        changes.append({"type": "growth", "label": "成长", "detail": line})
             elif event_type == "WITNESS_ATTEMPT":
                 changes.append({"type": "witness", "label": "被目击", "witness_id": event.get("actor_id"), "memory": payload.get("memory_text")})
             else:

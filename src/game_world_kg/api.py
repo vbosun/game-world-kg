@@ -184,24 +184,42 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/v1/worldspec/raw/{raw_id}/parse")
     def v1_worldspec_raw_parse(raw_id: str) -> dict[str, Any]:
+        from .worldspec import parse_raw_worldspec_text
         from .worldspec_draft_repository import CandidateRepository, RawDraftRepository
         def _do():
             repo = RawDraftRepository(service.conn)
             draft = repo.get(raw_id)
             if draft is None:
                 raise KeyError(raw_id)
-            generator = WorldSpecGenerator(service.llm_client)
-            from .worldspec import WorldIntentExtractor
-            intent = WorldIntentExtractor().extract(draft["idea"])
-            spec = generator.generate(draft["idea"])
-            if spec is None:
-                return {"raw_id": raw_id, "parse_success": False, "error": generator.last_error}
-            report = service.validate_worldspec(spec.model_dump(mode="json"))
+
+            # Parse saved raw_text only — no LLM call, no regeneration
+            raw_text = draft.get("extracted_json_text") or draft.get("raw_text") or ""
+            parsed, extracted_json, parse_error = parse_raw_worldspec_text(raw_text)
+
+            # Update parse result on the raw draft
+            if parse_error:
+                repo.update_parse_result(
+                    raw_id,
+                    extracted_json_text=extracted_json or "",
+                    json_parse_status="failed",
+                    json_parse_error=parse_error,
+                )
+                return {"raw_id": raw_id, "parse_success": False, "error": parse_error}
+
+            repo.update_parse_result(
+                raw_id,
+                extracted_json_text=extracted_json or "",
+                json_parse_status="parsed",
+            )
+
+            # Validate against the full validator
+            report = service.validate_worldspec(parsed)
+            world_id = parsed.get("world_id", raw_id)
             candidate_id = CandidateRepository(service.conn).save(
                 raw_id=raw_id,
                 trace_id=draft.get("trace_id"),
-                world_id=spec.world_id,
-                spec_json=spec.model_dump(mode="json"),
+                world_id=world_id,
+                spec_json=parsed,
                 status="validated" if report.get("valid") else "rejected",
                 validation_report_json=report,
             )

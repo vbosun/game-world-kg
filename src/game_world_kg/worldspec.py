@@ -465,6 +465,54 @@ def _preflight_structural_issues(candidate: dict[str, Any]) -> list[ValidationIs
     return issues
 
 
+def parse_raw_worldspec_text(raw_text: str) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Parse a saved raw_text into a WorldSpec payload without calling any LLM.
+
+    Returns (parsed_payload, extracted_json_text, parse_error).
+    """
+    from .worldspec_runtime import WorldSpecNormalizer
+
+    # 1. Extract JSON object from text
+    extracted = _extract_json_object(raw_text)
+    if not extracted:
+        return None, None, "raw_text contains no JSON object"
+
+    # 2. json.loads
+    try:
+        payload = json.loads(extracted)
+    except json.JSONDecodeError as exc:
+        return None, extracted, f"JSON parse error: {exc}"
+
+    if not isinstance(payload, dict):
+        return None, extracted, "parsed JSON is not a dict"
+
+    # 3. Normalize
+    normalizer = WorldSpecNormalizer()
+    normalized = normalizer.normalize(payload)
+
+    # 4. Validate with Pydantic model
+    try:
+        WorldSpec.model_validate(normalized)
+    except Exception as exc:
+        return None, extracted, f"WorldSpec validation error: {exc}"
+
+    return normalized, extracted, None
+
+
+def _extract_json_object(text: str) -> str | None:
+    """Extract the first JSON object {...} from text, stripping markdown fences."""
+    stripped = text.strip().lstrip("﻿")
+    if stripped.startswith("```"):
+        import re as _re
+        stripped = _re.sub(r"^```(?:json)?\s*", "", stripped, count=1, flags=_re.IGNORECASE)
+        stripped = _re.sub(r"\s*```$", "", stripped, count=1)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    return stripped[start: end + 1]
+
+
 class WorldIntentExtractor:
     def extract(self, idea: str) -> dict[str, str]:
         genre = "cultivation" if any(word in idea for word in ["修仙", "外门", "宗门", "妖兽"]) else "village"
