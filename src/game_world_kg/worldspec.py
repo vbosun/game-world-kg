@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from .llm import LLMError
+
 
 Scale = Literal["small_dense"]
 
@@ -526,11 +528,29 @@ class WorldSpecGenerator:
         self.llm_client = llm_client
         self.last_source = "sample_fallback"
         self.last_candidate_payload: dict[str, Any] | None = None
+        self.last_candidate_text: str | None = None
+        self.last_raw_response: str | None = None
         self.last_repair_prompt: dict[str, Any] | None = None
         self.last_error: str | None = None
+        self.last_error_type: str | None = None
+        self.last_json_parse_error: str | None = None
+        self.last_pydantic_error: str | None = None
+        self.last_validation_report: dict[str, Any] | None = None
+        self.last_json_repair_used: bool = False
+        self.last_json_repair_mode: str | None = None
+        self.last_json_repair_model: str | None = None
+        self.last_json_repaired_response: str | None = None
+        self.last_json_repair_attempts: list[dict[str, Any]] | None = None
+        self.last_warnings: list[str] | None = None
+        self.last_normalized_candidate: dict[str, Any] | None = None
+        self.repair_attempted: bool = False
+        self.repair_success: bool = False
+        self.repair_error: str | None = None
+        self.requested_genre: str | None = None
 
     def generate(self, idea: str) -> WorldSpec:
         intent = WorldIntentExtractor().extract(idea)
+        self.requested_genre = intent.get("genre")
         if self.llm_client is not None:
             spec = self._generate_with_llm(intent)
             if spec is not None:
@@ -540,6 +560,7 @@ class WorldSpecGenerator:
         return sample_world_spec(intent["genre"], idea)
 
     def _generate_with_llm(self, intent: dict[str, str]) -> WorldSpec | None:
+        payload: dict[str, Any] | None = None
         try:
             timeout_seconds = getattr(getattr(self.llm_client, "config", None), "worldgen_timeout_seconds", None)
             timeout_kwargs = {"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}
@@ -565,9 +586,26 @@ class WorldSpecGenerator:
                 **timeout_kwargs,
             )
             self.last_candidate_payload = payload
+            self.last_json_parse_error = None
+        except LLMError as exc:
+            self.last_candidate_payload = payload
+            self.last_json_parse_error = str(exc)
+            self.last_error = str(exc)
+            self.last_error_type = "json_parse_error"
+            return None
+        except Exception as exc:
+            self.last_candidate_payload = payload
+            self.last_error = str(exc)
+            self.last_error_type = "runtime_error"
+            return None
+
+        # JSON parse succeeded — now validate against Pydantic schema
+        try:
             return WorldSpec.model_validate(payload)
         except Exception as exc:
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_pydantic_error = str(exc)
+            self.last_error = str(exc)
+            self.last_error_type = "pydantic_validation_error"
             return None
 
 

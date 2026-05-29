@@ -34,6 +34,7 @@ class WorldSpecGenerator:
         self.normalizer = WorldSpecNormalizer()
         self.last_source = "sample_fallback"
         self.last_candidate_payload: dict[str, Any] | None = None
+        self.last_candidate_text: str | None = None
         self.last_normalized_candidate: dict[str, Any] | None = None
         self.last_raw_response: str | None = None
         self.last_json_parse_error: str | None = None
@@ -46,6 +47,11 @@ class WorldSpecGenerator:
         self.last_validation_report: dict[str, Any] | None = None
         self.last_repair_attempts: list[dict[str, Any]] = []
         self.last_error: str | None = None
+        self.last_error_type: str | None = None
+        self.last_pydantic_error: str | None = None
+        self.repair_attempted: bool = False
+        self.repair_success: bool = False
+        self.repair_error: str | None = None
         self.last_warnings: list[str] = []
         self.requested_genre: str | None = None
 
@@ -62,6 +68,13 @@ class WorldSpecGenerator:
         return spec
 
     def _generate_with_llm(self, intent: dict[str, str]) -> WorldSpec | None:
+        self.last_error_type = None
+        self.last_error = None
+        self.last_json_parse_error = None
+        self.last_pydantic_error = None
+        self.repair_attempted = False
+        self.repair_success = False
+        self.repair_error = None
         try:
             timeout_seconds = getattr(getattr(self.llm_client, "config", None), "worldgen_timeout_seconds", None)
             timeout_kwargs = {"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}
@@ -79,9 +92,11 @@ class WorldSpecGenerator:
             self.last_json_repaired_response = parse_result.repaired_text if parse_result.json_repair_used else None
             if not parse_result.success or parse_result.parsed_json is None:
                 self.last_error = "JSONDecodeError: " + (parse_result.error or "unknown JSON parse error")
+                self.last_error_type = "json_parse_error"
                 return None
             payload = parse_result.parsed_json
             self.last_candidate_payload = payload
+            self.last_candidate_text = json.dumps(payload, ensure_ascii=False)
             normalized = self.normalizer.normalize(payload)
             self.last_normalized_candidate = normalized
             report = _safe_validate(normalized)
@@ -89,14 +104,21 @@ class WorldSpecGenerator:
             self.last_validation_report = report
             source = "llm_candidate"
             if not report["valid"]:
+                self.repair_attempted = True
                 normalized = WorldSpecRepairer().repair(normalized, report)
                 self.last_normalized_candidate = normalized
                 report = _safe_validate(normalized)
                 self.last_repair_attempts.append(report)
                 source = "repaired_llm_candidate"
                 self.last_validation_report = report
+                if report["valid"]:
+                    self.repair_success = True
+                else:
+                    self.repair_error = "ValidationError: " + json.dumps(report, ensure_ascii=False)[:500]
             if not report["valid"]:
-                self.last_error = "ValidationError: " + json.dumps(report, ensure_ascii=False)
+                self.last_error = self.repair_error or ("ValidationError: " + json.dumps(report, ensure_ascii=False)[:500])
+                self.last_error_type = "pydantic_validation_error"
+                self.last_pydantic_error = self.last_error
                 return None
             spec = WorldSpec.model_validate(normalized)
             self.last_source = source
@@ -104,10 +126,8 @@ class WorldSpecGenerator:
             return spec
         except Exception as exc:
             self.last_raw_response = getattr(self.llm_client, "last_raw_text", None)
-            if self.last_candidate_payload is not None:
-                self.last_error = f"ValidationError: {type(exc).__name__}: {exc}"
-            else:
-                self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error_type = "runtime_error"
             return None
 
     def _record_warnings(self, requested_genre: str, spec_payload: dict[str, Any]) -> None:
