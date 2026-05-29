@@ -775,6 +775,27 @@ pytest tests/test_candidate_history.py -v 通过。
 - fallback 不再掩盖失败原因。
 ```
 
+当前状态：**部分通过**
+
+当前证据：
+
+- `scripts/eval_worldspec_generation.py` 已修复，使用真实 DB 初始化 + `build_llm_client_from_env()`
+- 2026-05-29 使用 AnthropicClient 对 10 个 world idea 进行真实 LLM 批量生成
+- 报告输出至 `docs/worldspec-generation-stability_20260529_135521.{csv,md}`
+
+实测结果：
+
+| 指标 | 数值 | 比率 |
+|---|---|---|
+| raw_saved | 10/10 | 100% |
+| json_parse_success | 5/10 | 50% |
+| pydantic_valid | 10/10 | 100% |
+| validator_valid | 10/10 | 100% |
+| fallback_used | 5/10 | 50% |
+| errors | 0/10 | 0% |
+
+验收结论：P1-01 部分通过，final valid 100%，LLM direct parse 50%。瓶颈在 JSON parse，详见 `docs/worldspec-generation-failure-analysis.md`。
+
 ---
 
 ### P1-02：Memory Scope 污染验收

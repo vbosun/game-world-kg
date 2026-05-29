@@ -375,6 +375,7 @@ Tension 应包含 stake、deadline、sponsors、blockers、player_touchpoints；
 | WG-DRAFT-06 parse 成功保存 candidate | 完成 | JSON+Pydantic 成功后保存 candidate。 |
 | WG-DRAFT-07 candidate validate | 完成 | API 已有。 |
 | WG-DRAFT-08 repaired_json | 基础完成 | submit-repaired-json 已有，但无 version/history。 |
+| WG-DRAFT-09 批量生成稳定率 | 部分通过 | 10-sample 实测: final valid 100%, LLM parse 50%, fallback 50%。详见 `docs/worldspec-generation-failure-analysis.md`。 |
 
 ## Phase 3 Tasks
 
