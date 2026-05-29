@@ -38,22 +38,19 @@
 
 ## 4. 失败原因推断
 
-由于此次跑批使用 `:memory:` 数据库，raw LLM 响应在进程结束后丢失，以下基于常见 LLM JSON 生成模式推断：
+已确认 `GAME_WORLD_KG_LLM_MAX_TOKENS=24000`，排除截断。`_loads_json_object()` 已处理 markdown fence strip。失败点在以下两处之一：
 
-### 4.1 最可能原因：JSON 截断
+### 4.1 `_loads_json_object()` 失败 → LLMError
 
-`WorldSpecGenerator` 调用 LLM 时 `max_tokens` 默认为 4096。一个完整 WorldSpec JSON 约 3000-8000 tokens。`max_tokens` 不够时 JSON 末尾被截断，缺少闭合 `}`，`json.loads()` 抛出 `JSONDecodeError`。
+`llm.py:273` 的 `_loads_json_object()` 从 LLM 返回文本中提取 `{...}` 然后 `json.loads()`。如果 LLM 返回的不是合法 JSON 对象（如纯文本描述、空响应、嵌套错误），抛出 `LLMError`。
 
-**证据**：5 个 fallback 样本的 idea 都偏向复杂题材（修仙、谍影、门派纷争），可能需要更长的 JSON 输出。
+### 4.2 `WorldSpec.model_validate()` 失败 → ValidationError
 
-### 4.2 次要可能原因
+JSON parse 成功但 Pydantic schema 校验失败。例如：缺少必填字段、字段类型错误、`action_templates` 中引用了不存在的 `target_id` 等。
 
-| 原因 | 可能性 | 说明 |
-|---|---|---|
-| LLM 输出前后包裹 markdown 代码块 | 中 | ` ```json ... ``` ` 包裹，`json.loads()` 前未 strip |
-| 中文标点混入 JSON key/value | 低 | 中文引号 `""` 被 LLM 用在 JSON 值中 |
-| 尾随逗号 | 低 | LLM 常在数组/对象末尾多加逗号 |
-| Schema 漂移 | 中 | LLM 返回的结构与 `WorldSpec` Pydantic model 字段不匹配 |
+### 4.3 无法区分的原因
+
+`WorldSpecGenerator._generate_with_llm()` (line 542) 用 `except Exception as exc` 统一捕获，只存 `self.last_error`，不区分 `LLMError` 和 `ValidationError`。5 个失败样本的具体错误类型未知。
 
 ## 5. 当前容错路径
 
@@ -71,52 +68,55 @@ LLM response → json.loads() → Pydantic model_validate → Validator
 
 ## 6. 修复方案
 
-### 6.1 增加 max_tokens（低风险，立即生效）
+### 6.1 区分 JSON parse 失败 vs Schema 校验失败（P0）
+
+当前 `_generate_with_llm` 统一 `except Exception`，丢失了失败原因。修改为分别记录：
 
 ```python
-# config.py 或 env
-GAME_WORLD_KG_LLM_MAX_TOKENS=8192  # 从 4096 提升
+# worldspec.py _generate_with_llm
+try:
+    payload = self.llm_client.complete_json(...)
+    self.last_candidate_payload = payload
+    self.last_json_parse_error = None
+    spec = WorldSpec.model_validate(payload)
+    self.last_validation_error = None
+    return spec
+except LLMError as exc:       # JSON parse 失败
+    self.last_json_parse_error = str(exc)
+    self.last_error = str(exc)
+    return None
+except ValidationError as exc:  # Schema 校验失败
+    self.last_validation_error = str(exc)
+    self.last_error = str(exc)
+    return None
 ```
 
-### 6.2 LLM 返回后先 strip markdown 包裹（低风险）
+### 6.2 Schema 校验失败时先用 WorldSpecRepairer 修复（P1）
 
-在 `WorldSpecGenerator._generate_with_llm()` 中，`json.loads()` 之前增加：
+当前 `generate()` → `_generate_with_llm()` 失败 → 直接 `sample_fallback`。应插入 repair 步骤：
+
+```
+LLM JSON parse 成功 → model_validate 失败 → WorldSpecRepairer.repair() → model_validate 重试
+                                                    ↓ 仍失败
+                                              sample fallback
+```
+
+`WorldSpecRepairer.repair()` 已能修复 disconnected locations、missing goals、dangling refs 等常见问题，但 `WorldSpecGenerator` 未在 parse 成功后调用它。
+
+### 6.3 持久化 raw response 用于离线分析（P2）
+
+`eval_worldspec_generation.py` 使用 `:memory:` 导致 raw response 丢失。改为文件 DB：
 
 ```python
-def _strip_markdown_fence(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:].strip()
-    return text
+conn = connect("eval_worldspec.db")
 ```
 
-### 6.3 parse 失败时先尝试 localized repair，再 fallback（中风险）
-
-当前流程是 `LLM parse 失败 → sample fallback`。应改为：
-
-```
-LLM parse 失败 → localized JSON repair (truncation fix, markdown strip, trailing comma) → parse
-                    ↓ 仍失败
-              sample fallback
-```
-
-`JsonRepairer` 已有 `_repair_truncated_json()` 和 `_repair_markdown_fence()`，但 `WorldSpecGenerator` 未在 parse 失败时调用。
-
-### 6.4 保留 raw response 用于离线分析（低风险）
-
-当前 `:memory:` 数据库使 raw response 丢失。建议在 `eval_worldspec_generation.py` 中使用文件 DB：
-
-```python
-conn = connect("eval_worldspec.db")  # 持久化，便于事后分析
-```
+并在报告中输出 `last_error` 字段，区分 parse 和 schema 错误。
 
 ## 7. 优先级建议
 
 | 优先级 | 方案 | 预期效果 |
 |---|---|---|
-| P0 | 6.1 增加 max_tokens | 减少截断，parse 率 50%→70%+ |
-| P0 | 6.2 strip markdown fence | 消除代码块包裹失败 |
-| P1 | 6.3 parse 失败先 repair | 减少 fallback，parse 率→80%+ |
-| P2 | 6.4 持久化 raw response | 支持后续精确分析 |
+| P0 | 6.1 区分 parse vs schema 错误 | 知道 50% 失败的真正原因 |
+| P1 | 6.2 schema 失败先 repair | 减少 fallback，parse 率 50%→70%+ |
+| P2 | 6.3 持久化 raw response | 事后精确分析 |
