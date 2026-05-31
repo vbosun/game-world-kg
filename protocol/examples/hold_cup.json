@@ -1,0 +1,8 @@
+{
+  "action": "hold_cup",
+  "expression": "neutral",
+  "prop": "cup",
+  "gaze": "look_at_user",
+  "camera": "front_medium",
+  "screenshot": true
+}
