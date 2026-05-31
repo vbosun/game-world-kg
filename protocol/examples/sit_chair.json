@@ -1,0 +1,8 @@
+{
+  "action": "sit_chair",
+  "expression": "smile",
+  "prop": "none",
+  "gaze": "look_at_user",
+  "camera": "front_full",
+  "screenshot": true
+}
