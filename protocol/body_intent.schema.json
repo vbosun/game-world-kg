@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/vbosun/AI-Body-Runtime/protocol/body_intent.schema.json",
+  "title": "BodyIntent",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "look_at_user",
+        "wave",
+        "sit_chair",
+        "stand_up",
+        "hold_cup"
+      ]
+    },
+    "expression": {
+      "type": "string",
+      "default": "neutral",
+      "enum": [
+        "neutral",
+        "smile",
+        "surprised"
+      ]
+    },
+    "prop": {
+      "type": "string",
+      "default": "none",
+      "enum": [
+        "none",
+        "cup"
+      ]
+    },
+    "gaze": {
+      "type": "string",
+      "default": "none",
+      "enum": [
+        "none",
+        "look_at_user"
+      ]
+    },
+    "camera": {
+      "type": "string",
+      "default": "front_medium",
+      "enum": [
+        "front_medium",
+        "front_full",
+        "close_face"
+      ]
+    },
+    "screenshot": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "action"
+  ]
+}
