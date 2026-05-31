@@ -1,0 +1,8 @@
+{
+  "action": "wave",
+  "expression": "smile",
+  "prop": "none",
+  "gaze": "look_at_user",
+  "camera": "front_medium",
+  "screenshot": true
+}
