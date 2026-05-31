@@ -1,0 +1,8 @@
+{
+  "action": "idle",
+  "expression": "neutral",
+  "prop": "none",
+  "gaze": "none",
+  "camera": "front_medium",
+  "screenshot": true
+}
