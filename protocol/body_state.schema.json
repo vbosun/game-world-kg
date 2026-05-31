@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/vbosun/AI-Body-Runtime/protocol/body_state.schema.json",
+  "title": "BodyStateResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pose": { "type": "string" },
+        "action": { "type": "string" },
+        "expression": { "type": "string" },
+        "holding": { "type": "string" },
+        "gaze": { "type": "string" },
+        "camera": { "type": "string" },
+        "is_busy": { "type": "boolean" },
+        "last_action_status": { "type": "string" }
+      },
+      "required": [
+        "pose",
+        "action",
+        "expression",
+        "holding",
+        "gaze",
+        "camera",
+        "is_busy",
+        "last_action_status"
+      ]
+    },
+    "screenshot_path": {
+      "type": "string"
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": [
+    "ok",
+    "state",
+    "screenshot_path",
+    "errors"
+  ]
+}
